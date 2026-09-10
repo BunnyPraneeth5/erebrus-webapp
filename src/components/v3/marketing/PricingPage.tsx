@@ -1,14 +1,46 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Check } from "lucide-react";
+import { Check, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { AuthModalTrigger } from "@/components/v3/AuthModal";
 import { AccentButton, Card, Eyebrow, MonoLabel } from "@/components/v3/ui";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { useWalletAuth } from "@/context/appkit";
+import {
+  fetchBillingPlans,
+  fetchOrgBilling,
+  fetchOrgs,
+  fetchProfile,
+  startOrgBillingCheckout,
+} from "@/lib/gateway/client";
+import type {
+  GatewayBillingPlan,
+  GatewayBillingPrice,
+  GatewayOrg,
+} from "@/lib/gateway/types";
+import { isOrgOwner } from "@/lib/gateway/org-permissions";
+import { orgPlanLabel } from "@/lib/org-plans";
+import {
+  FREE_PLAN_ID,
+  billingErrorMessage,
+  canCheckout,
+  formatMinor,
+  priceForInterval,
+  type BillingInterval,
+} from "@/lib/billing";
 import {
   type BillingPeriod,
+  type PricingPlan,
   PRICING_PLANS,
   ENTERPRISE_PLAN,
   COMPARISON_ROWS,
@@ -23,6 +55,44 @@ import {
   UNLIMITED_ORG_MEMBERS_FEATURE,
   UNLIMITED_FREE_ORG_MEMBERS_FEATURE,
 } from "@/lib/pricing-plans";
+
+const CHECKOUT_POLL_MS = 2500;
+const CHECKOUT_POLL_TIMEOUT_MS = 60_000;
+
+function intervalFor(period: BillingPeriod): BillingInterval {
+  return period === "annual" ? "yearly" : "monthly";
+}
+
+/** Live gateway price wins; static marketing copy is the fallback. */
+function liveDisplayPrice(
+  plan: PricingPlan,
+  period: BillingPeriod,
+  price: GatewayBillingPrice | undefined
+): { main: string; sub: string } {
+  if (price) {
+    if (price.billing_interval === "yearly") {
+      return {
+        main: `${formatMinor(price.amount_minor, price.currency)}/yr`,
+        sub: `≈ ${formatMinor(Math.round(price.amount_minor / 12), price.currency)}/mo — billed annually`,
+      };
+    }
+    return {
+      main: `${formatMinor(price.amount_minor, price.currency)}/mo`,
+      sub: "Billed monthly",
+    };
+  }
+  return getDisplayPrice(plan, period);
+}
+
+type PlanCta =
+  | { kind: "free" }
+  | { kind: "signin" }
+  | { kind: "loading" }
+  | { kind: "no-owned-org" }
+  | { kind: "verify-email" }
+  | { kind: "current" }
+  | { kind: "unavailable"; reason: string }
+  | { kind: "upgrade" };
 
 function FeatureLabel({ feature }: { feature: string }) {
   if (feature === COMMUNITY_EDITION_FEATURE) {
@@ -43,7 +113,7 @@ function FeatureLabel({ feature }: { feature: string }) {
     return (
       <>
         {feature}
-        <sup className="ml-0.5 font-mono text-[10px] text-[var(--accent-hi)]">
+        <sup className="ml-0.5 font-mono text-[10px] text-[var(--text-3)]">
           †
         </sup>
       </>
@@ -87,7 +157,7 @@ function BillingToggle({
               : "text-[var(--text-2)] hover:text-[var(--text)]",
           )}
         >
-          Annual
+          Yearly
         </button>
       </div>
       <span className={cn("rounded-full border px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-wide", period === "annual" ? "border-[var(--success)]/25 bg-[var(--success)]/10 text-[var(--success)]" : "border-white/[0.08] text-[var(--text-3)]")}>
@@ -100,21 +170,22 @@ function BillingToggle({
 function PlanCard({
   plan,
   period,
-  businessView,
+  price,
+  cta,
+  isCurrent,
+  pending,
+  onUpgrade,
 }: {
   plan: (typeof PRICING_PLANS)[number];
   period: BillingPeriod;
-  businessView: boolean;
+  price: GatewayBillingPrice | undefined;
+  cta: PlanCta;
+  isCurrent: boolean;
+  pending: boolean;
+  onUpgrade: (planId: string) => void;
 }) {
-  const price = getDisplayPrice(plan, period);
+  const display = liveDisplayPrice(plan, period, price);
   const inheritsLabel = getInheritsLabel(plan);
-
-  const isPilotCta = businessView && !plan.ctaEnabled;
-  const ctaButton = (
-    <AccentButton className="!flex !w-full !py-3.5" disabled={!plan.ctaEnabled && !isPilotCta}>
-      {isPilotCta ? plan.cta : plan.ctaEnabled ? plan.cta : "Coming soon"}
-    </AccentButton>
-  );
 
   return (
     <Card
@@ -144,7 +215,14 @@ function PlanCard({
       </div>
 
       <div>
-        <h3 className="text-2xl font-bold tracking-tight">{plan.name}</h3>
+        <h3 className="text-2xl font-bold tracking-tight">
+          {plan.name}
+          {isCurrent && (
+            <span className="ml-2 align-middle rounded-full border border-[var(--success)]/30 bg-[var(--success)]/10 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-[var(--success)]">
+              Current plan
+            </span>
+          )}
+        </h3>
         <p className="font-mono text-[11px] tracking-wide text-[var(--accent-hi)] uppercase">
           {plan.subtitle}
         </p>
@@ -160,9 +238,9 @@ function PlanCard({
       </div>
 
       <div className="border-t border-white/[0.06] pt-5">
-        <div className="text-3xl font-bold tracking-tight">{price.main}</div>
+        <div className="text-3xl font-bold tracking-tight">{display.main}</div>
         <div className="mt-1 font-mono text-xs text-[var(--text-3)]">
-          {price.sub}
+          {display.sub}
         </div>
       </div>
 
@@ -236,21 +314,70 @@ function PlanCard({
         </div>
 
         <div className="w-full">
-          {isPilotCta ? (
-            <Link href={`/contact?intent=business-pilot&plan=${plan.id}`} className="flex w-full">
-              {ctaButton}
-            </Link>
-          ) : plan.ctaEnabled ? (
+          {cta.kind === "free" && (
+            <div className="py-3.5 text-center font-mono text-xs text-[var(--text-3)]">
+              Free forever
+            </div>
+          )}
+
+          {cta.kind === "loading" && (
+            <AccentButton className="!flex !w-full !py-3.5" disabled>
+              <Loader2 className="mx-auto h-4 w-4 animate-spin" />
+            </AccentButton>
+          )}
+
+          {cta.kind === "signin" && (
             <AuthModalTrigger className="flex w-full">
-              {ctaButton}
+              <AccentButton className="!flex !w-full !py-3.5">
+                {plan.cta}
+              </AccentButton>
             </AuthModalTrigger>
-          ) : (
+          )}
+
+          {cta.kind === "no-owned-org" && (
             <>
-              {ctaButton}
+              <AccentButton className="!flex !w-full !py-3.5" disabled>
+                {plan.cta}
+              </AccentButton>
               <p className="mt-2 text-center font-mono text-[10px] text-[var(--text-3)]">
-                Plan launching soon
+                You must own a workspace to subscribe
               </p>
             </>
+          )}
+
+          {cta.kind === "verify-email" && (
+            <Link href="/profile" className="flex w-full">
+              <AccentButton className="!flex !w-full !py-3.5">
+                Verify email to upgrade
+              </AccentButton>
+            </Link>
+          )}
+
+          {cta.kind === "current" && (
+            <AccentButton className="!flex !w-full !py-3.5" disabled>
+              Current plan
+            </AccentButton>
+          )}
+
+          {cta.kind === "unavailable" && (
+            <>
+              <AccentButton className="!flex !w-full !py-3.5" disabled>
+                {plan.ctaEnabled ? plan.cta : "Coming soon"}
+              </AccentButton>
+              <p className="mt-2 text-center font-mono text-[10px] text-[var(--text-3)]">
+                {cta.reason}
+              </p>
+            </>
+          )}
+
+          {cta.kind === "upgrade" && (
+            <AccentButton
+              className="!flex !w-full !py-3.5"
+              disabled={pending}
+              onClick={() => onUpgrade(plan.id)}
+            >
+              {pending ? "Preparing checkout…" : plan.cta}
+            </AccentButton>
           )}
         </div>
       </div>
@@ -267,10 +394,164 @@ export function PricingPageContent() {
   const visiblePlans = PRICING_PLANS.filter((plan) => plan.id.startsWith(`${audience}.`));
   const comparisonRows = COMPARISON_ROWS.filter((row) => row.planId.startsWith(`${audience}.`));
 
+  // Auth state is cookie-based — identical markup on server and first client
+  // render (signed-out), then re-resolve after mount (same pattern as RequireAuth).
+  const [mounted, setMounted] = useState(false);
+  const { isAuthenticated } = useWalletAuth();
+  const authed = mounted && isAuthenticated;
+
+  const [billingPlans, setBillingPlans] = useState<Record<string, GatewayBillingPlan>>({});
+  const [ownedOrgs, setOwnedOrgs] = useState<GatewayOrg[]>([]);
+  const [orgsLoading, setOrgsLoading] = useState(false);
+  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
+  const [emailVerified, setEmailVerified] = useState<boolean | null>(null);
+  const [pendingPlanId, setPendingPlanId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+    fetchBillingPlans()
+      .then((plans) =>
+        setBillingPlans(Object.fromEntries(plans.map((p) => [p.id, p])))
+      )
+      .catch(() => setBillingPlans({}));
+  }, []);
+
+  useEffect(() => {
+    if (!authed) {
+      setOwnedOrgs([]);
+      setSelectedOrgId(null);
+      setEmailVerified(null);
+      return;
+    }
+    setOrgsLoading(true);
+    fetchOrgs()
+      .then((orgs) => setOwnedOrgs(orgs.filter((o) => isOrgOwner(o))))
+      .catch(() => setOwnedOrgs([]))
+      .finally(() => setOrgsLoading(false));
+    fetchProfile()
+      .then((p) => setEmailVerified(p.email_verified === true))
+      .catch(() => setEmailVerified(null));
+  }, [authed]);
+
+  const selectedOrg =
+    ownedOrgs.find((o) => o.id === selectedOrgId) ?? ownedOrgs[0] ?? null;
+
   const setAudience = (value: "personal" | "business") => {
     const params = new URLSearchParams(searchParams.toString());
     params.set("audience", value);
     router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  };
+
+  /**
+   * Poll billing until the checkout attempt resolves: `ready` hands back the
+   * Dodo URL to redirect to, `completed`/`active` means payment already landed.
+   * Only `GET /orgs/:id/billing` is trusted — never the redirect params.
+   */
+  const pollCheckout = async (orgId: string, attemptId: string) => {
+    const deadline = Date.now() + CHECKOUT_POLL_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, CHECKOUT_POLL_MS));
+      const status = await fetchOrgBilling(orgId).catch(() => null);
+      if (!status) continue;
+      if (status.provider_status === "active" && status.plan_id !== FREE_PLAN_ID) {
+        toast.success("Subscription activated");
+        router.push(`/workspace/${orgId}?tab=billing`);
+        return;
+      }
+      const attempt = status.checkout;
+      if (!attempt || attempt.attempt_id !== attemptId) continue;
+      if (attempt.status === "ready" && attempt.checkout_url) {
+        window.location.href = attempt.checkout_url;
+        return;
+      }
+      if (attempt.status === "completed") {
+        toast.success("Subscription activated");
+        router.push(`/workspace/${orgId}?tab=billing`);
+        return;
+      }
+      if (attempt.status === "failed" || attempt.status === "expired") {
+        toast.error("Checkout could not be prepared. Please try again.");
+        return;
+      }
+    }
+    toast.message(
+      "Checkout is still being prepared — check billing in workspace settings."
+    );
+  };
+
+  const startCheckout = async (planId: string) => {
+    if (!selectedOrg || pendingPlanId) return;
+    const price = priceForInterval(billingPlans[planId], intervalFor(period));
+    if (!price?.checkout_enabled) return;
+    // One key per attempt, kept in component state only.
+    const idempotencyKey = crypto.randomUUID();
+    setPendingPlanId(planId);
+    try {
+      const attempt = await startOrgBillingCheckout(selectedOrg.id, {
+        plan_id: planId,
+        billing_interval: intervalFor(period),
+        idempotency_key: idempotencyKey,
+      });
+      if (attempt.status === "ready" && attempt.checkout_url) {
+        window.location.href = attempt.checkout_url;
+        return;
+      }
+      if (attempt.status === "creating" || attempt.status === "unknown") {
+        toast.message("Preparing checkout…");
+        await pollCheckout(selectedOrg.id, attempt.attempt_id);
+        return;
+      }
+      if (attempt.status === "completed") {
+        router.push(`/workspace/${selectedOrg.id}?tab=billing`);
+        return;
+      }
+      toast.error("Checkout could not be prepared. Please try again.");
+    } catch (err) {
+      toast.error(billingErrorMessage(err));
+    } finally {
+      setPendingPlanId(null);
+    }
+  };
+
+  const resolveCta = (plan: (typeof PRICING_PLANS)[number]): PlanCta => {
+    if (plan.id === "personal.basic") return { kind: "free" };
+    if (!authed) return { kind: "signin" };
+    if (orgsLoading || emailVerified === null) return { kind: "loading" };
+    if (ownedOrgs.length === 0) return { kind: "no-owned-org" };
+    if (!selectedOrg) return { kind: "loading" };
+    if (emailVerified === false) return { kind: "verify-email" };
+    if (selectedOrg.plan === plan.id) return { kind: "current" };
+    if (!canCheckout(selectedOrg.plan ?? FREE_PLAN_ID, plan.id)) {
+      return { kind: "unavailable", reason: "Plan changes aren't supported yet" };
+    }
+    const price = priceForInterval(billingPlans[plan.id], intervalFor(period));
+    if (!price) {
+      return { kind: "unavailable", reason: "Not available for this interval" };
+    }
+    if (!price.checkout_enabled) {
+      return { kind: "unavailable", reason: "Plan launching soon" };
+    }
+    return { kind: "upgrade" };
+  };
+
+  const liveComparisonPrice = (planId: string, p: BillingPeriod): string => {
+    const price = priceForInterval(billingPlans[planId], intervalFor(p));
+    if (price) {
+      return `${formatMinor(price.amount_minor, price.currency)}/${price.billing_interval === "yearly" ? "yr" : "mo"}`;
+    }
+    return getComparisonPrice(planId as never, p);
+  };
+
+  const liveComparisonMonthly = (planId: string, p: BillingPeriod): string => {
+    const price = priceForInterval(billingPlans[planId], intervalFor(p));
+    if (price) {
+      const perMonth =
+        price.billing_interval === "yearly"
+          ? Math.round(price.amount_minor / 12)
+          : price.amount_minor;
+      return `${formatMinor(perMonth, price.currency)}/mo`;
+    }
+    return getComparisonMonthlyEquivalent(planId as never, p);
   };
 
   return (
@@ -299,6 +580,37 @@ export function PricingPageContent() {
             {(["personal", "business"] as const).map((value) => <button key={value} type="button" onClick={() => setAudience(value)} aria-pressed={audience === value} className={cn("min-h-11 rounded-full px-6 text-sm font-semibold capitalize transition-colors", audience === value ? "bg-[var(--accent)] text-[var(--on-accent)]" : "text-[var(--text-2)] hover:text-[var(--text)]")}>{value}</button>)}
           </div>
         </div>
+
+        {authed && (
+          <div className="mt-8 flex flex-col items-center gap-2.5">
+            <MonoLabel>
+              {ownedOrgs.length > 0 ? "Subscribing" : "Workspace"}
+            </MonoLabel>
+            {ownedOrgs.length > 0 ? (
+              <Select
+                value={selectedOrg?.id ?? ""}
+                onValueChange={(v) => setSelectedOrgId(v)}
+              >
+                <SelectTrigger className="w-[300px] border-white/10 bg-white/[0.03]">
+                  <SelectValue placeholder="Choose a workspace" />
+                </SelectTrigger>
+                <SelectContent>
+                  {ownedOrgs.map((o) => (
+                    <SelectItem key={o.id} value={o.id}>
+                      {o.name} — {orgPlanLabel(o.plan ?? o.kind)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              !orgsLoading && (
+                <p className="text-sm text-[var(--text-3)]">
+                  You must own a workspace to subscribe.
+                </p>
+              )
+            )}
+          </div>
+        )}
       </section>
 
       <section className="mx-auto max-w-[1180px] px-4 pt-2 pb-12 md:px-8">
@@ -308,7 +620,16 @@ export function PricingPageContent() {
         </div>
         <div className={cn("grid gap-5 md:grid-cols-2 xl:grid-rows-[auto_auto_auto_1fr_auto]", audience === "personal" ? "xl:grid-cols-3" : "xl:grid-cols-2")}>
           {visiblePlans.map((plan) => (
-            <PlanCard key={plan.id} plan={plan} period={period} businessView={audience === "business"} />
+            <PlanCard
+              key={plan.id}
+              plan={plan}
+              period={period}
+              price={priceForInterval(billingPlans[plan.id], intervalFor(period))}
+              cta={resolveCta(plan)}
+              isCurrent={authed && selectedOrg?.plan === plan.id}
+              pending={pendingPlanId !== null}
+              onUpgrade={startCheckout}
+            />
           ))}
         </div>
       </section>
@@ -398,10 +719,10 @@ export function PricingPageContent() {
                   Best for
                 </th>
                 <th className="pb-4 pr-4 font-mono text-[10px] tracking-wide text-[var(--text-3)] uppercase">
-                  {period === "annual" ? "Annual (eff. monthly)" : "Monthly"}
+                  {period === "annual" ? "Yearly (eff. monthly)" : "Monthly"}
                 </th>
                 <th className="pb-4 pr-4 font-mono text-[10px] tracking-wide text-[var(--text-3)] uppercase">
-                  {period === "annual" ? "Annual price" : "Monthly price"}
+                  {period === "annual" ? "Yearly price" : "Monthly price"}
                 </th>
                 <th className="pb-4 font-mono text-[10px] tracking-wide text-[var(--text-3)] uppercase">
                   Includes
@@ -427,10 +748,10 @@ export function PricingPageContent() {
                     <td className="py-4 pr-4 align-top font-mono text-[var(--text)]">
                       {isEnterprise
                         ? "Custom"
-                        : getComparisonMonthlyEquivalent(planId, period)}
+                        : liveComparisonMonthly(planId, period)}
                     </td>
                     <td className="py-4 pr-4 align-top font-mono text-[var(--text)]">
-                      {getComparisonPrice(planId, period)}
+                      {liveComparisonPrice(planId, period)}
                     </td>
                     <td className="py-4 align-top text-[var(--text-2)]">
                       {row.keyIncludes}

@@ -61,6 +61,8 @@ import {
   visibilityLabel,
 } from "@/lib/gateway/profiles";
 import { NodeFirewallPanel } from "@/components/v3/workspace/NodeFirewallPanel";
+import { BillingPanel } from "@/components/v3/workspace/BillingPanel";
+import { FREE_PLAN_ID } from "@/lib/billing";
 import {
   AccentButton,
   ActionButton,
@@ -95,7 +97,13 @@ const INVITE_ROLES = [
 
 type InviteRole = (typeof INVITE_ROLES)[number]["value"];
 
-export function OrgDetailPanel({ orgId }: { orgId: string }) {
+export function OrgDetailPanel({
+  orgId,
+  initialTab,
+}: {
+  orgId: string;
+  initialTab?: string;
+}) {
   const [org, setOrg] = useState<GatewayOrg | null>(null);
   const [nodes, setNodes] = useState<GatewayOrgNode[]>([]);
   const [nodeServices, setNodeServices] = useState<Record<string, GatewayOrgNodeService[]>>({});
@@ -485,13 +493,24 @@ export function OrgDetailPanel({ orgId }: { orgId: string }) {
               </span>
             </div>
           </div>
-          {isUpgradeablePlan(org.plan) && (
-            <a href="/pricing" target="_blank" rel="noopener noreferrer">
-              <AccentButton type="button" variant="ghost" className="!px-4 !py-2.5">
+          {isUpgradeablePlan(org.plan) &&
+            (org.plan && org.plan !== FREE_PLAN_ID ? (
+              <AccentButton
+                type="button"
+                variant="ghost"
+                className="!px-4 !py-2.5"
+                disabled
+                title="Plan changes are not supported yet"
+              >
                 Upgrade plan ↗
               </AccentButton>
-            </a>
-          )}
+            ) : (
+              <Link href="/pricing">
+                <AccentButton type="button" variant="ghost" className="!px-4 !py-2.5">
+                  Upgrade plan ↗
+                </AccentButton>
+              </Link>
+            ))}
         </div>
       </Card>
 
@@ -504,10 +523,13 @@ export function OrgDetailPanel({ orgId }: { orgId: string }) {
         <StatCard label="API calls (30d)" value={usage.api_calls ?? "—"} />
       </div>
 
-      <Tabs defaultValue="nodes">
+      <Tabs defaultValue={initialTab ?? "nodes"}>
         <TabsList className={v3TabsListClass}>
           <TabsTrigger value="nodes" className={v3TabsTriggerClass}>
             Nodes
+          </TabsTrigger>
+          <TabsTrigger value="billing" className={v3TabsTriggerClass}>
+            Billing
           </TabsTrigger>
           <TabsTrigger value="members" className={v3TabsTriggerClass}>
             Members
@@ -1149,6 +1171,10 @@ export function OrgDetailPanel({ orgId }: { orgId: string }) {
             </Card>
           </TabsContent>
         )}
+
+        <TabsContent value="billing" className="mt-4 space-y-4">
+          <BillingPanel org={org} />
+        </TabsContent>
       </Tabs>
 
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

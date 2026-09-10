@@ -19,7 +19,7 @@ import {
 import { PhantomWalletAdapter } from "@solana/wallet-adapter-phantom";
 import { SolflareWalletAdapter } from "@solana/wallet-adapter-solflare";
 import { defineChain } from "@reown/appkit/networks";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import Cookies from "js-cookie";
 import { toast } from "sonner";
 import type { Provider } from "@reown/appkit-adapter-solana/react";
@@ -158,16 +158,7 @@ const NETWORK_IDS = {
   RISE: Number(riseTestnet.id),
 };
 
-// Helper to get chain type
-const getChainType = (chainId: string | number): "solana" | "evm" => {
-  const chainIdNum =
-    typeof chainId === "string" ? parseInt(chainId, 10) : chainId;
-  return chainIdNum === NETWORK_IDS.SOLANA ||
-    chainIdNum === Number(solanaDevnet.id) ||
-    chainIdNum === Number(solanaTestnet.id)
-    ? "solana"
-    : "evm";
-};
+
 
 // Helper to get cookie key with chain suffix
 const getChainCookieKey = (key: string, chainType: string) => {
@@ -386,7 +377,7 @@ export function useWalletAuth() {
   // cookie rather than guessing the chain from caipNetworkId — that value can be
   // momentarily undefined right after a redirect, which otherwise reads the wrong
   // (empty) chain cookie and forces a redundant second sign-in.
-  const getCurrentAuthStatus = () => {
+  const getCurrentAuthStatus = useCallback(() => {
     if (!isConnected || !address) return false;
     const lower = address.toLowerCase();
     for (const chainType of ["solana", "evm"] as const) {
@@ -399,7 +390,7 @@ export function useWalletAuth() {
       if (wallet?.toLowerCase() === lower) return true;
     }
     return false;
-  };
+  }, [isConnected, address]);
 
   // Update authSuccess state when authentication status changes
   useEffect(() => {
@@ -411,7 +402,7 @@ export function useWalletAuth() {
     if (isAuth && authError) {
       setAuthError(null);
     }
-  }, [isConnected, address, caipNetworkId, authSuccess, authError]);
+  }, [isConnected, address, caipNetworkId, authSuccess, authError, getCurrentAuthStatus]);
 
   // Authentication function
   const authenticate = async () => {

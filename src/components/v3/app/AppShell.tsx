@@ -32,6 +32,7 @@ const SCREEN_META: Record<string, { title: string; subtitle: string }> = {
   "/rewards": { title: "Rewards & XP", subtitle: "Earn, claim, and climb tiers" },
   "/storage": { title: "Drop", subtitle: "Local transfer + optional storage" },
   "/subscribe": { title: "Plan", subtitle: "Your organization entitlements" },
+  "/billing": { title: "Billing", subtitle: "Checkout and subscription status" },
   "/admin": { title: "Admin Console", subtitle: "Platform administration" },
 };
 
@@ -97,7 +98,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   const orgDetail = pathname.match(/^\/workspace\/([^/]+)$/);
   const meta = orgDetail
     ? { title: "Workspace", subtitle: "Org detail and operator tools" }
-    : SCREEN_META[pathname] ?? { title: "Erebrus", subtitle: "" };
+    : pathname === "/billing" || pathname.startsWith("/billing/")
+      ? SCREEN_META["/billing"]
+      : (SCREEN_META[pathname] ?? { title: "Erebrus", subtitle: "" });
 
   return (
     <AuthModalProvider>

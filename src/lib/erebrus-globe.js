@@ -77,7 +77,7 @@ export function createNodeGlobe(canvas, opts = {}) {
 
   const handleClick = (ev) => {
     const hit = pickNode(ev);
-    if (hit) { selectedId = hit.id; onSelect && onSelect(hit.id); }
+    if (hit) { selectedId = hit.id; if (onSelect) onSelect(hit.id); }
   };
   const handleMove = (ev) => {
     const hit = pickNode(ev);
@@ -85,11 +85,11 @@ export function createNodeGlobe(canvas, opts = {}) {
     canvas.style.cursor = id ? 'pointer' : 'default';
     // Pause spin while the pointer rests on a node so it's easy to click.
     autoRotate = !id;
-    if (id !== hoveredId) { hoveredId = id; onHover && onHover(id); }
+    if (id !== hoveredId) { hoveredId = id; if (onHover) onHover(id); }
   };
   const handleLeave = () => {
     autoRotate = true;
-    if (hoveredId !== null) { hoveredId = null; onHover && onHover(null); }
+    if (hoveredId !== null) { hoveredId = null; if (onHover) onHover(null); }
   };
   canvas.addEventListener('click', handleClick);
   canvas.addEventListener('mousemove', handleMove);

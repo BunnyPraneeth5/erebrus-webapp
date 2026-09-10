@@ -57,6 +57,10 @@ import type {
   RewardAccess,
   RewardApplicationInput,
   RewardOperatorApplication,
+  GatewayBillingPlan,
+  GatewayBillingStatus,
+  GatewayCheckoutAttempt,
+  GatewayCancelResult,
 } from "./types";
 
 const CLIENT_HEADER = "webapp";
@@ -594,6 +598,42 @@ export async function revokeOrgApiKey(orgId: string, keyId: string): Promise<voi
   await gatewayFetch(`orgs/${orgId}/apikeys/${keyId}`, { method: "DELETE" });
 }
 
+// ── Billing (Dodo Payments via gateway — never call Dodo from the browser) ──
+
+/** Public plan catalog with per-interval prices. */
+export async function fetchBillingPlans(): Promise<GatewayBillingPlan[]> {
+  const data = await gatewayFetch<unknown>("subscriptions/plans", { auth: false });
+  return Array.isArray(data) ? (data as GatewayBillingPlan[]) : [];
+}
+
+export async function fetchOrgBilling(orgId: string): Promise<GatewayBillingStatus> {
+  return gatewayFetch(`orgs/${orgId}/billing`);
+}
+
+/**
+ * Creates (or resumes, via `idempotency_key`) a checkout attempt for the org.
+ * On `status: "ready"` the response carries `checkout_url` — redirect the
+ * browser there; all payment state is confirmed server-side by the gateway.
+ */
+export async function startOrgBillingCheckout(
+  orgId: string,
+  body: {
+    plan_id: string;
+    billing_interval: "monthly" | "yearly";
+    idempotency_key: string;
+  }
+): Promise<GatewayCheckoutAttempt> {
+  return gatewayFetch(`orgs/${orgId}/billing/checkout`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/** Schedules cancellation at the next billing date; access runs until `paid_access_until`. */
+export async function requestOrgBillingCancel(orgId: string): Promise<GatewayCancelResult> {
+  return gatewayFetch(`orgs/${orgId}/billing/cancel`, { method: "POST" });
+}
+
 // ── Operator ───────────────────────────────────────────────────────────────
 
 /**
@@ -608,21 +648,10 @@ export async function fetchOrgVpnNodes(): Promise<GatewayNode[]> {
 
 export async function fetchOperatorNodes(): Promise<GatewayOperatorNode[]> {
   const data = await gatewayFetch<unknown>("operator/nodes");
-  if (!Array.isArray(data)) return [];
-  return data.map((n) => {
-    const raw = n as Record<string, unknown>;
-    return {
-      id: String(raw.id ?? raw.node_id ?? ""),
-      did: String(raw.did ?? ""),
-      region: String(raw.region ?? ""),
-      name: raw.name as string | undefined,
-      status: String(raw.status ?? "offline"),
-      access_mode: String(raw.access_mode ?? "public"),
-      org_id: raw.org_id as string | undefined,
-      uptime_pct: Number(raw.uptime_pct ?? 0),
-      wg_peers: Number(raw.wg_peers ?? 0),
-    };
-  });
+  // operator/nodes returns the same node shape as discovery; normalizeNode
+  // derives geo, status, load, peers, wallet, and org from the gateway's
+  // nodeOperatorView response.
+  return asArray(data, (raw) => normalizeNode(raw) as GatewayOperatorNode);
 }
 
 export async function fetchOperatorNodeMetrics(

@@ -75,6 +75,19 @@ function uuid(): string {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+export function isUploadActive(status: UploadItemStatus): boolean {
+  return ["queued", "preparing", "reserving", "uploading", "finalizing"].includes(status);
+}
+
+export function claimQueuedUploads(items: UploadItem[], capacity: number) {
+  const toStart = items.filter((item) => item.status === "queued").slice(0, Math.max(0, capacity));
+  const starting = new Set(toStart.map((item) => item.id));
+  return {
+    toStart,
+    items: items.map((item): UploadItem => starting.has(item.id) ? { ...item, status: "preparing" } : item),
+  };
+}
+
 export function useDropUploads(
   options: { prepare?: PrepareContent; onComplete?: () => void } = {}
 ) {
@@ -87,22 +100,29 @@ export function useDropUploads(
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
-  useEffect(() => {
-    itemsRef.current = items;
-  }, [items]);
+  const mounted = useRef(true);
 
-  useEffect(
-    () => () => {
-      for (const controller of controllers.current.values()) controller.abort();
-      controllers.current.clear();
-      preparedContent.current.clear();
-    },
-    []
-  );
+  useEffect(() => {
+    mounted.current = true;
+    const running = controllers.current;
+    const prepared = preparedContent.current;
+    return () => {
+      mounted.current = false;
+      for (const controller of running.values()) controller.abort();
+      running.clear();
+      prepared.clear();
+    };
+  }, []);
+
+  const updateItems = useCallback((update: (current: UploadItem[]) => UploadItem[]) => {
+    if (!mounted.current) return;
+    itemsRef.current = update(itemsRef.current);
+    setItems(itemsRef.current);
+  }, []);
 
   const patch = useCallback((id: string, next: Partial<UploadItem>) => {
-    setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...next } : it)));
-  }, []);
+    updateItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...next } : it)));
+  }, [updateItems]);
 
   // Mutual recursion between run and pump goes through refs so neither callback
   // needs the other in its dependency list.
@@ -120,8 +140,10 @@ export function useDropUploads(
         let prepared = preparedContent.current.get(item.id);
         if (!prepared) {
           prepared = await prepare(item, controller.signal);
+          controller.signal.throwIfAborted();
           preparedContent.current.set(item.id, prepared);
         }
+        controller.signal.throwIfAborted();
 
         patch(item.id, { status: "reserving" });
         const upload = await createDropUpload(
@@ -141,6 +163,7 @@ export function useDropUploads(
           controller.signal
         );
 
+        controller.signal.throwIfAborted();
         patch(item.id, {
           status: "uploading",
           uploadId: upload.upload_id,
@@ -151,7 +174,10 @@ export function useDropUploads(
         const result = await uploadDropContent(upload.upload_id, prepared.blob, {
           contentType: "application/octet-stream",
           signal: controller.signal,
-          onProgress: (sent, total) => patch(item.id, { sentBytes: sent, totalBytes: total }),
+          onProgress: (sent, total) => patch(item.id, {
+            sentBytes: sent, totalBytes: total,
+            status: total > 0 && sent >= total ? "finalizing" : "uploading",
+          }),
         });
 
         patch(item.id, {
@@ -160,9 +186,9 @@ export function useDropUploads(
           sentBytes: prepared.blob.size,
         });
         preparedContent.current.delete(item.id);
-        optionsRef.current.onComplete?.();
+        if (mounted.current) optionsRef.current.onComplete?.();
       } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") {
+        if (controller.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) {
           patch(item.id, { status: "canceled" });
         } else {
           patch(item.id, { status: "error", error: errorMessage(err) });
@@ -177,18 +203,12 @@ export function useDropUploads(
   );
 
   const pump = useCallback(() => {
-    const free = MAX_CONCURRENT_UPLOADS - activeCount.current;
-    if (free <= 0) return;
-    const toStart = itemsRef.current
-      .filter((it) => it.status === "queued")
-      .slice(0, free);
-    if (toStart.length === 0) return;
-    const starting = new Set(toStart.map((it) => it.id));
-    setItems((prev) =>
-      prev.map((it) => (starting.has(it.id) ? { ...it, status: "preparing" } : it))
-    );
-    for (const it of toStart) void runRef.current({ ...it, status: "preparing" });
-  }, []);
+    if (!mounted.current) return;
+    const claimed = claimQueuedUploads(itemsRef.current, MAX_CONCURRENT_UPLOADS - activeCount.current);
+    if (claimed.toStart.length === 0) return;
+    updateItems(() => claimed.items);
+    for (const it of claimed.toStart) void runRef.current({ ...it, status: "preparing" });
+  }, [updateItems]);
 
   runRef.current = run;
   pumpRef.current = pump;
@@ -207,43 +227,31 @@ export function useDropUploads(
       sentBytes: 0,
       totalBytes: input.file.size,
     }));
-    setItems((prev) => {
-      const next = [...newItems, ...prev];
-      itemsRef.current = next;
-      return next;
-    });
+    updateItems((prev) => [...prev, ...newItems]);
     pumpRef.current();
-  }, []);
+  }, [updateItems]);
 
   const cancel = useCallback((id: string) => {
-    controllers.current.get(id)?.abort();
-    setItems((prev) =>
-      prev.map((it) =>
-        it.id === id && (it.status === "queued" || it.status === "reserving")
-          ? { ...it, status: "canceled" }
-          : it
-      )
-    );
-  }, []);
+    const controller = controllers.current.get(id);
+    if (controller) controller.abort();
+    else updateItems((prev) => prev.map((it) => it.id === id && isUploadActive(it.status) ? { ...it, status: "canceled" } : it));
+  }, [updateItems]);
 
   const retry = useCallback((id: string) => {
-    setItems((prev) => {
-      const next = prev.map((it) =>
-        it.id === id && (it.status === "error" || it.status === "canceled")
-          ? { ...it, status: "queued" as UploadItemStatus, error: undefined, sentBytes: 0 }
-          : it
-      );
-      itemsRef.current = next;
-      return next;
-    });
+    if (controllers.current.has(id)) return;
+    updateItems((prev) => prev.map((it) =>
+      it.id === id && (it.status === "error" || it.status === "canceled")
+        ? { ...it, status: "queued", error: undefined, sentBytes: 0 }
+        : it
+    ));
     pumpRef.current();
-  }, []);
+  }, [updateItems]);
 
   const remove = useCallback((id: string) => {
     controllers.current.get(id)?.abort();
     preparedContent.current.delete(id);
-    setItems((prev) => prev.filter((it) => it.id !== id));
-  }, []);
+    updateItems((prev) => prev.filter((it) => it.id !== id));
+  }, [updateItems]);
 
   const clearFinished = useCallback(() => {
     for (const item of itemsRef.current) {
@@ -251,8 +259,8 @@ export function useDropUploads(
         preparedContent.current.delete(item.id);
       }
     }
-    setItems((prev) => prev.filter((it) => it.status !== "done" && it.status !== "canceled"));
-  }, []);
+    updateItems((prev) => prev.filter((it) => it.status !== "done" && it.status !== "canceled"));
+  }, [updateItems]);
 
   return { items, enqueue, cancel, retry, remove, clearFinished };
 }

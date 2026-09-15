@@ -6,6 +6,8 @@ import { Card, ActionButton } from "@/components/v3/ui";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
 import { Download, Trash2, Copy, Share2, Lock, Globe, Check } from "lucide-react";
 import type { DropFile, DropFileStatus } from "@/lib/drop/types";
+import { toast } from "sonner";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 
 const STATUS_META: Record<
   DropFileStatus,
@@ -36,15 +38,21 @@ export function DropFileList({
   onShare: (file: DropFile) => void;
 }) {
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<DropFile | null>(null);
 
   const copyCid = async (file: DropFile) => {
     if (!file.cid) return;
-    await navigator.clipboard.writeText(file.cid);
-    setCopiedId(file.id);
-    setTimeout(() => setCopiedId((id) => (id === file.id ? null : id)), 1500);
+    try {
+      await navigator.clipboard.writeText(file.cid);
+      setCopiedId(file.id);
+      setTimeout(() => setCopiedId((id) => (id === file.id ? null : id)), 1500);
+    } catch {
+      toast.error("Could not copy the CID. Check your browser's clipboard permissions.");
+    }
   };
 
   return (
+    <>
     <Card className="overflow-hidden">
       <div className="flex items-center justify-between border-b border-white/[0.06] px-5 py-4">
         <div className="flex items-center gap-2.5">
@@ -107,7 +115,7 @@ export function DropFileList({
                   </div>
                 </div>
 
-                <div className="flex shrink-0 items-center gap-1.5">
+                <div className="flex w-full flex-wrap items-center gap-1.5 sm:w-auto sm:shrink-0">
                   {file.cid && (
                     <ActionButton
                       variant="neutral"
@@ -130,7 +138,7 @@ export function DropFileList({
                   )}
                   <ActionButton
                     variant="accent"
-                    disabled={!canDownload || busy}
+                    disabled={!canDownload || busyId !== null}
                     onClick={() => onDownload(file)}
                     aria-label={`Download ${file.filename}`}
                   >
@@ -139,8 +147,8 @@ export function DropFileList({
                   </ActionButton>
                   <ActionButton
                     variant="danger"
-                    disabled={busy || file.status === "delete_pending"}
-                    onClick={() => onDelete(file)}
+                    disabled={busyId !== null || file.status === "delete_pending"}
+                    onClick={() => setDeleteTarget(file)}
                     aria-label={`Delete ${file.filename}`}
                   >
                     <Trash2 size={13} />
@@ -152,5 +160,23 @@ export function DropFileList({
         </ul>
       )}
     </Card>
+    <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+      <AlertDialogContent className="max-h-[90dvh] overflow-y-auto border-white/10 bg-[var(--elevated)] text-[var(--text)]">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete this file?</AlertDialogTitle>
+          <AlertDialogDescription className="break-words text-[var(--text-2)]">
+            Remove {deleteTarget?.filename} from Drop? You cannot undo this from the file list. Copies already downloaded or cached elsewhere may remain.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep file</AlertDialogCancel>
+          <AlertDialogAction disabled={busyId !== null} className="bg-[var(--danger)] text-white" onClick={() => {
+            if (deleteTarget && busyId === null) onDelete(deleteTarget);
+            setDeleteTarget(null);
+          }}>Delete file</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }

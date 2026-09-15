@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
@@ -57,6 +57,11 @@ export function DropDashboard() {
   const [visibility, setVisibility] = useState<DropVisibility>("private");
   const [busyFileId, setBusyFileId] = useState<string | null>(null);
   const [webuiBusy, setWebuiBusy] = useState(false);
+  const [filesError, setFilesError] = useState<string | null>(null);
+  const [nodesError, setNodesError] = useState<string | null>(null);
+  const [nodeRetry, setNodeRetry] = useState(0);
+  const fileRequest = useRef(0);
+  const fileOperation = useRef(false);
 
   const scopeChoices = useMemo<ScopeChoice[]>(() => {
     const choices: ScopeChoice[] = [
@@ -92,16 +97,21 @@ export function DropDashboard() {
 
   const refreshFiles = useCallback(async () => {
     if (!isAuthenticated || !activeScope) return;
+    const requestId = ++fileRequest.current;
     setFilesLoading(true);
+    setFilesError(null);
     try {
       const [f, u] = await Promise.all([
-        fetchDropFiles(activeScope.orgId ?? undefined).catch(() => []),
-        fetchDropUsage(activeScope.orgId ?? undefined).catch(() => null),
+        fetchDropFiles(activeScope.orgId ?? undefined),
+        fetchDropUsage(activeScope.orgId ?? undefined),
       ]);
+      if (requestId !== fileRequest.current) return;
       setFiles(f);
       setUsage(u);
+    } catch {
+      if (requestId === fileRequest.current) setFilesError("Could not refresh files and storage usage. Please try again.");
     } finally {
-      setFilesLoading(false);
+      if (requestId === fileRequest.current) setFilesLoading(false);
     }
   }, [isAuthenticated, activeScope]);
 
@@ -144,6 +154,7 @@ export function DropDashboard() {
     if (!isAuthenticated || !activeScope) return;
     let active = true;
     setNodesLoading(true);
+    setNodesError(null);
     setSelectedNode(null);
     fetchDropNodes(activeScope.scope, activeScope.orgId ?? undefined)
       .then((list) => {
@@ -154,15 +165,23 @@ export function DropDashboard() {
         );
         setSelectedNode(firstEligible ?? null);
       })
-      .catch(() => active && setNodes([]))
+      .catch(() => {
+        if (active) {
+          setNodes([]);
+          setNodesError("Storage nodes could not be loaded. Please try again.");
+        }
+      })
       .finally(() => active && setNodesLoading(false));
     return () => {
       active = false;
     };
-  }, [isAuthenticated, activeScope]);
+  }, [isAuthenticated, activeScope, nodeRetry]);
 
   useEffect(() => {
+    setFiles([]);
+    setUsage(null);
     void refreshFiles();
+    return () => { fileRequest.current += 1; };
   }, [refreshFiles]);
 
   // Private org nodes default to private; a public node's first-use default is
@@ -205,6 +224,8 @@ export function DropDashboard() {
         toast.error("Unlock your encryption vault to download this file.");
         return;
       }
+      if (fileOperation.current) return;
+      fileOperation.current = true;
       setBusyFileId(file.id);
       try {
         await downloadDropFile(file, { decrypt: decryptor });
@@ -214,6 +235,7 @@ export function DropDashboard() {
           err instanceof Error ? err.message : `Could not download ${file.filename}`
         );
       } finally {
+        fileOperation.current = false;
         setBusyFileId(null);
       }
     },
@@ -222,6 +244,8 @@ export function DropDashboard() {
 
   const handleDelete = useCallback(
     async (file: DropFile) => {
+      if (fileOperation.current) return;
+      fileOperation.current = true;
       setBusyFileId(file.id);
       try {
         await deleteDropFile(file.id);
@@ -230,6 +254,7 @@ export function DropDashboard() {
       } catch (err) {
         toast.error(err instanceof GatewayApiError ? err.message : "Delete failed");
       } finally {
+        fileOperation.current = false;
         setBusyFileId(null);
       }
     },
@@ -240,8 +265,12 @@ export function DropDashboard() {
     // Public share uses an opaque, app-hosted link keyed by file id — never the
     // raw CID, which is not an access-control mechanism.
     const url = `${window.location.origin}/s/${file.id}`;
-    await navigator.clipboard.writeText(url);
-    toast.success("Share link copied");
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("Share link copied");
+    } catch {
+      toast.error("Could not copy the link. Check your browser's clipboard permissions.");
+    }
   }, []);
 
   const handleOpenWebui = useCallback(async () => {
@@ -306,12 +335,13 @@ export function DropDashboard() {
             </div>
           </Card>
 
-          <DropNodePicker
+          {nodesError && <Card className="p-4 text-sm"><p role="alert">{nodesError}</p><button type="button" className="mt-2 min-h-11 text-[var(--accent-hi)] underline" onClick={() => setNodeRetry((value) => value + 1)}>Retry loading nodes</button></Card>}
+          {!nodesError && <DropNodePicker
             nodes={nodes}
             selectedId={selectedNode?.id ?? null}
             onSelect={setSelectedNode}
             loading={nodesLoading}
-          />
+          />}
 
           {canOpenWebui && selectedNode?.webui_available && (
             <Card className="p-5">
@@ -369,14 +399,15 @@ export function DropDashboard() {
         </div>
       </div>
 
-      <DropFileList
+      {filesError && <Card className="p-4 text-sm"><p role="alert">{filesError}</p><button type="button" disabled={filesLoading} className="mt-2 min-h-11 text-[var(--accent-hi)] underline" onClick={() => void refreshFiles()}>Retry loading files</button></Card>}
+      {(!filesError || files.length > 0) && <DropFileList
         files={files}
         loading={filesLoading}
         busyId={busyFileId}
         onDownload={handleDownload}
         onDelete={handleDelete}
         onShare={handleShare}
-      />
+      />}
     </div>
   );
 }

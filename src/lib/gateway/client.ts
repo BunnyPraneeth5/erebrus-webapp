@@ -123,11 +123,12 @@ async function gatewayFetch<T>(
   const res = await fetch(buildUrl(path, params), { ...init, headers, cache: "no-store" });
 
   if (!res.ok) {
+    const text = await res.text();
     let body: unknown;
     try {
-      body = await res.json();
+      body = JSON.parse(text);
     } catch {
-      body = await res.text();
+      body = text;
     }
     const message =
       typeof body === "object" && body !== null && "error" in body
@@ -143,8 +144,8 @@ async function gatewayFetch<T>(
 
 // ── Nodes ──────────────────────────────────────────────────────────────────
 
-export async function fetchNodes(params?: { region?: string; status?: string }): Promise<GatewayNode[]> {
-  const data = await gatewayFetch<unknown>("nodes", { params, auth: false });
+export async function fetchNodes(params?: { region?: string; status?: string }, signal?: AbortSignal): Promise<GatewayNode[]> {
+  const data = await gatewayFetch<unknown>("nodes", { params, auth: false, signal });
   return asArray(data, normalizeNode);
 }
 
@@ -606,8 +607,8 @@ export async function fetchBillingPlans(): Promise<GatewayBillingPlan[]> {
   return Array.isArray(data) ? (data as GatewayBillingPlan[]) : [];
 }
 
-export async function fetchOrgBilling(orgId: string): Promise<GatewayBillingStatus> {
-  return gatewayFetch(`orgs/${orgId}/billing`);
+export async function fetchOrgBilling(orgId: string, signal?: AbortSignal): Promise<GatewayBillingStatus> {
+  return gatewayFetch(`orgs/${orgId}/billing`, { signal });
 }
 
 /**

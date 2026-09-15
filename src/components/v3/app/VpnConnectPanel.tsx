@@ -35,6 +35,7 @@ import { toast } from "sonner";
 import {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
   SheetTrigger,
@@ -42,6 +43,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -87,7 +89,7 @@ function ScopeChip({
 }
 
 export function VpnConnectPanel() {
-  const { nodes: publicNodes, loading: nodesLoading } = useOnlineNodes();
+  const { nodes: publicNodes, loading: nodesLoading, error: nodesError, refresh: refreshNodes } = useOnlineNodes();
   const [clients, setClients] = useState<GatewayVpnClient[]>([]);
   const [orgs, setOrgs] = useState<GatewayOrg[]>([]);
   const [orgNodes, setOrgNodes] = useState<GatewayNode[]>([]);
@@ -385,13 +387,20 @@ export function VpnConnectPanel() {
   if (loading || nodesLoading) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-[var(--accent)]" />
+        <Loader2 aria-hidden="true" className="h-8 w-8 animate-spin text-[var(--accent)]" />
+        <span role="status" className="ml-3 text-sm text-[var(--text-2)]">Loading your VPN connections…</span>
       </div>
     );
   }
 
   return (
     <div className="space-y-5">
+      {scope === null && nodesError && (
+        <Card className="p-4 text-sm text-[var(--text-2)]">
+          <p role="alert">{nodesError}</p>
+          <ActionButton variant="neutral" className="mt-3" onClick={() => void refreshNodes()}>Refresh nodes</ActionButton>
+        </Card>
+      )}
       {atLimit && (
         <Card className="flex flex-col items-start justify-between gap-4 p-5 sm:flex-row sm:items-center">
           <p className="text-sm text-[var(--text-2)]">
@@ -404,7 +413,7 @@ export function VpnConnectPanel() {
         </Card>
       )}
 
-      {scope === null && onlinePublicNodes.length === 0 && (
+      {scope === null && !nodesError && onlinePublicNodes.length === 0 && (
         <Card className="border-white/[0.06] bg-white/[0.02] p-4 text-sm text-[var(--text-2)]">
           No public nodes are online right now. Public nodes only appear when operators keep them
           online with <span className="font-mono text-xs">access_mode=public</span>. Switch to a
@@ -544,6 +553,7 @@ export function VpnConnectPanel() {
             <SheetContent className="border-white/10 bg-[var(--elevated)] text-[var(--text)] w-full sm:max-w-md">
               <SheetHeader>
                 <SheetTitle>Select node</SheetTitle>
+                <SheetDescription>Choose an available node for your VPN connection.</SheetDescription>
               </SheetHeader>
               <div className="mt-4 max-h-[70vh] space-y-2 overflow-y-auto">
                 {nodes.map((node) => (
@@ -823,6 +833,7 @@ export function VpnConnectPanel() {
         <DialogContent className="border-white/10 bg-[var(--elevated)] text-[var(--text)]">
           <DialogHeader>
             <DialogTitle>Name this device</DialogTitle>
+            <DialogDescription>Choose a name so you can identify this VPN connection later.</DialogDescription>
           </DialogHeader>
           <Label htmlFor="device-name">Device name</Label>
           <Input
@@ -851,6 +862,7 @@ export function VpnConnectPanel() {
         <DialogContent className="border-white/10 bg-[var(--elevated)] text-[var(--text)] sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>{configModal?.name} — VPN config</DialogTitle>
+            <DialogDescription>Import this configuration on your device. Keep the file and QR code private.</DialogDescription>
           </DialogHeader>
           {configModal?.hasKey ? (
             <div className="flex flex-col items-center gap-4">

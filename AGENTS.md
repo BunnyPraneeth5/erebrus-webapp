@@ -213,3 +213,11 @@ if (!mounted) return null;
 - NFT minting is no longer a standalone feature; `/mint` redirects to `/`
 - Node offline status is not always gracefully handled in UI
 - Mobile responsiveness needs attention in several areas
+
+## Frontend Verification
+
+- Run `pnpm type-check`, `pnpm lint`, and `pnpm test` from this repository.
+- `pnpm test --maxWorkers=2` limits test concurrency on memory-constrained development machines.
+- `pnpm exec next build --webpack` verifies the production build without running the `prebuild` installer-download script. `pnpm build` also refreshes `public/install.sh` from the upstream repository.
+- Vitest uses the Node environment. Mock browser APIs and external wallet/payment services in tests; do not use real sessions or perform real payments.
+- Browser wallet initialization is skipped during SSR and when the Reown project ID is missing or malformed. This does not disable email/social sign-in or replace a valid Reown project configuration.

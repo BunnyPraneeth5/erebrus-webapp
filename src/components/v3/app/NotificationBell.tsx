@@ -5,6 +5,7 @@ import { Bell } from "lucide-react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -124,6 +125,7 @@ export function NotificationBell() {
         <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto border-white/10 bg-[var(--elevated)] text-[var(--text)]">
           <DialogHeader>
             <DialogTitle className="sr-only">Workspace invitation</DialogTitle>
+            <DialogDescription className="sr-only">Review the workspace invitation before accepting or declining it.</DialogDescription>
           </DialogHeader>
           {detailInvite && (
             <OrgInviteDetailPanel

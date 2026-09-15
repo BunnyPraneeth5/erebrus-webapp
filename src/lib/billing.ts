@@ -2,6 +2,7 @@ import { GatewayApiError } from "@/lib/gateway/client";
 import type {
   GatewayBillingPlan,
   GatewayBillingPrice,
+  GatewayBillingStatus,
 } from "@/lib/gateway/types";
 
 /** Gateway interval vocabulary: the pricing UI uses "annual", the API "yearly". */
@@ -77,7 +78,14 @@ export function billingErrorMessage(err: unknown): string {
   if (err instanceof GatewayApiError && err.status === 409) {
     return BILLING_ERROR_MESSAGES.BILLING_CONFLICT;
   }
-  return err instanceof Error ? err.message : "Billing request failed";
+  if (err instanceof GatewayApiError) {
+    if (err.status === 401) return "Your session has expired. Please sign in again to check billing.";
+    if (err.status === 403) return "Only the workspace owner can manage billing.";
+    if (err.status === 429) return "Too many requests. Please wait before checking billing again.";
+    if (err.status >= 500) return "Billing is temporarily unavailable. Check billing status before trying another purchase.";
+    return err.message;
+  }
+  return "Unable to confirm the billing request. Check your connection and billing status before trying again.";
 }
 
 /** Short human label for `GatewayBillingStatus.provider_status`. */
@@ -89,6 +97,28 @@ export function providerStatusLabel(status: string | undefined): string {
     on_hold: "On hold",
     cancelled: "Cancelled",
     expired: "Expired",
+    failed: "Payment failed",
+    paused: "Paused",
   };
   return labels[status ?? "none"] ?? status ?? "No subscription";
+}
+
+export function safeCheckoutUrl(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+export function billingReturnPhase(status: GatewayBillingStatus, attemptId?: string | null) {
+  if (status.provider_status === "active" && status.plan_id && status.plan_id !== FREE_PLAN_ID) return "active";
+  if (["past_due", "on_hold", "failed", "paused"].includes(status.provider_status)) return "payment-issue";
+  const attempt = status.checkout;
+  if (attempt && attemptId && attempt.attempt_id === attemptId && (attempt.status === "failed" || attempt.status === "expired")) {
+    return attempt.status;
+  }
+  return "verifying";
 }

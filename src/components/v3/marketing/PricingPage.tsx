@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Check, Loader2 } from "lucide-react";
@@ -36,6 +36,7 @@ import {
   canCheckout,
   formatMinor,
   priceForInterval,
+  safeCheckoutUrl,
   type BillingInterval,
 } from "@/lib/billing";
 import {
@@ -56,6 +57,8 @@ import {
   UNLIMITED_FREE_ORG_MEMBERS_FEATURE,
 } from "@/lib/pricing-plans";
 
+import { createIdempotencyKey } from "@/lib/rewards";
+
 const CHECKOUT_POLL_MS = 2500;
 const CHECKOUT_POLL_TIMEOUT_MS = 60_000;
 
@@ -72,8 +75,8 @@ function liveDisplayPrice(
   if (price) {
     if (price.billing_interval === "yearly") {
       return {
-        main: `${formatMinor(price.amount_minor, price.currency)}/yr`,
-        sub: `≈ ${formatMinor(Math.round(price.amount_minor / 12), price.currency)}/mo — billed annually`,
+        main: `${formatMinor(Math.round(price.amount_minor / 12), price.currency)}/mo`,
+        sub: `${formatMinor(price.amount_minor, price.currency)} billed annually`,
       };
     }
     return {
@@ -126,9 +129,11 @@ function FeatureLabel({ feature }: { feature: string }) {
 function BillingToggle({
   period,
   onChange,
+  disabled = false,
 }: {
   period: BillingPeriod;
   onChange: (p: BillingPeriod) => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="flex items-center gap-2">
@@ -136,6 +141,7 @@ function BillingToggle({
         <button
           type="button"
           onClick={() => onChange("monthly")}
+          disabled={disabled}
           aria-pressed={period === "monthly"}
           className={cn(
             "min-h-9 rounded-md px-3 text-xs font-semibold transition-colors",
@@ -149,6 +155,7 @@ function BillingToggle({
         <button
           type="button"
           onClick={() => onChange("annual")}
+          disabled={disabled}
           aria-pressed={period === "annual"}
           className={cn(
             "min-h-9 rounded-md px-3 text-xs font-semibold transition-colors",
@@ -406,32 +413,51 @@ export function PricingPageContent() {
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
   const [emailVerified, setEmailVerified] = useState<boolean | null>(null);
   const [pendingPlanId, setPendingPlanId] = useState<string | null>(null);
+  const [catalogError, setCatalogError] = useState(false);
+  const [accountError, setAccountError] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const [recoveryOrgId, setRecoveryOrgId] = useState<string | null>(null);
+  const checkoutInFlight = useRef(false);
+  const checkoutController = useRef<AbortController | null>(null);
 
   useEffect(() => {
     setMounted(true);
-    fetchBillingPlans()
-      .then((plans) =>
-        setBillingPlans(Object.fromEntries(plans.map((p) => [p.id, p])))
-      )
-      .catch(() => setBillingPlans({}));
+    return () => checkoutController.current?.abort();
   }, []);
 
   useEffect(() => {
+    let active = true;
+    setCatalogError(false);
+    fetchBillingPlans()
+      .then((plans) => {
+        if (active) setBillingPlans(Object.fromEntries(plans.map((p) => [p.id, p])));
+      })
+      .catch(() => { if (active) { setBillingPlans({}); setCatalogError(true); } });
+    return () => { active = false; };
+  }, [retry]);
+
+  useEffect(() => {
+    let active = true;
+    setAccountError(false);
     if (!authed) {
       setOwnedOrgs([]);
       setSelectedOrgId(null);
       setEmailVerified(null);
+      setPendingPlanId(null);
+      checkoutController.current?.abort();
       return;
     }
     setOrgsLoading(true);
-    fetchOrgs()
-      .then((orgs) => setOwnedOrgs(orgs.filter((o) => isOrgOwner(o))))
-      .catch(() => setOwnedOrgs([]))
-      .finally(() => setOrgsLoading(false));
-    fetchProfile()
-      .then((p) => setEmailVerified(p.email_verified === true))
-      .catch(() => setEmailVerified(null));
-  }, [authed]);
+    Promise.all([fetchOrgs(), fetchProfile()])
+      .then(([orgs, profile]) => {
+        if (!active) return;
+        setOwnedOrgs(orgs.filter((o) => isOrgOwner(o)));
+        setEmailVerified(profile.email_verified === true);
+      })
+      .catch(() => { if (active) setAccountError(true); })
+      .finally(() => { if (active) setOrgsLoading(false); });
+    return () => { active = false; };
+  }, [authed, retry]);
 
   const selectedOrg =
     ownedOrgs.find((o) => o.id === selectedOrgId) ?? ownedOrgs[0] ?? null;
@@ -447,11 +473,14 @@ export function PricingPageContent() {
    * Dodo URL to redirect to, `completed`/`active` means payment already landed.
    * Only `GET /orgs/:id/billing` is trusted — never the redirect params.
    */
-  const pollCheckout = async (orgId: string, attemptId: string) => {
+  const pollCheckout = async (orgId: string, attemptId: string, signal: AbortSignal) => {
     const deadline = Date.now() + CHECKOUT_POLL_TIMEOUT_MS;
-    while (Date.now() < deadline) {
+    while (Date.now() < deadline && !signal.aborted) {
       await new Promise((r) => setTimeout(r, CHECKOUT_POLL_MS));
-      const status = await fetchOrgBilling(orgId).catch(() => null);
+      if (signal.aborted) return;
+      if (document.visibilityState === "hidden") continue;
+      const status = await fetchOrgBilling(orgId, signal).catch(() => null);
+      if (signal.aborted) return;
       if (!status) continue;
       if (status.provider_status === "active" && status.plan_id !== FREE_PLAN_ID) {
         toast.success("Subscription activated");
@@ -460,13 +489,13 @@ export function PricingPageContent() {
       }
       const attempt = status.checkout;
       if (!attempt || attempt.attempt_id !== attemptId) continue;
-      if (attempt.status === "ready" && attempt.checkout_url) {
-        window.location.href = attempt.checkout_url;
+      const url = safeCheckoutUrl(attempt.checkout_url);
+      if (attempt.status === "ready" && url) {
+        window.location.assign(url);
         return;
       }
       if (attempt.status === "completed") {
-        toast.success("Subscription activated");
-        router.push(`/workspace/${orgId}?tab=billing`);
+        router.push(`/billing/return?org_id=${orgId}&attempt_id=${encodeURIComponent(attemptId)}`);
         return;
       }
       if (attempt.status === "failed" || attempt.status === "expired") {
@@ -474,48 +503,77 @@ export function PricingPageContent() {
         return;
       }
     }
-    toast.message(
-      "Checkout is still being prepared — check billing in workspace settings."
-    );
+    if (!signal.aborted) {
+      setRecoveryOrgId(orgId);
+      toast.message("Checkout is still being prepared. Check workspace billing before another purchase.");
+    }
   };
 
   const startCheckout = async (planId: string) => {
-    if (!selectedOrg || pendingPlanId) return;
+    if (!selectedOrg || checkoutInFlight.current || accountError || catalogError || !emailVerified || recoveryOrgId === selectedOrg.id) return;
     const price = priceForInterval(billingPlans[planId], intervalFor(period));
-    if (!price?.checkout_enabled) return;
-    // One key per attempt, kept in component state only.
-    const idempotencyKey = crypto.randomUUID();
+    if (!price?.checkout_enabled || !canCheckout(selectedOrg.plan ?? FREE_PLAN_ID, planId)) return;
+    checkoutInFlight.current = true;
+    const controller = new AbortController();
+    checkoutController.current = controller;
     setPendingPlanId(planId);
+    const orgId = selectedOrg.id;
+    const timeout = setTimeout(() => {
+      if (controller.signal.aborted) return;
+      setRecoveryOrgId(orgId);
+      setPendingPlanId(null);
+      controller.abort();
+    }, CHECKOUT_POLL_TIMEOUT_MS);
     try {
-      const attempt = await startOrgBillingCheckout(selectedOrg.id, {
+      const current = await fetchOrgBilling(orgId, controller.signal);
+      if (controller.signal.aborted) return;
+      if (!canCheckout(current.plan_id, planId) || (current.checkout && ["ready", "creating", "unknown"].includes(current.checkout.status))) {
+        setRecoveryOrgId(orgId);
+        toast.message("Review the existing subscription or checkout in workspace billing.");
+        return;
+      }
+      // One key per attempt, kept in component state only.
+      const idempotencyKey = createIdempotencyKey();
+      const attempt = await startOrgBillingCheckout(orgId, {
         plan_id: planId,
         billing_interval: intervalFor(period),
         idempotency_key: idempotencyKey,
       });
-      if (attempt.status === "ready" && attempt.checkout_url) {
-        window.location.href = attempt.checkout_url;
+      if (controller.signal.aborted) return;
+      const url = safeCheckoutUrl(attempt.checkout_url);
+      if (attempt.status === "ready" && url) {
+        setRecoveryOrgId(orgId);
+        window.location.assign(url);
         return;
       }
       if (attempt.status === "creating" || attempt.status === "unknown") {
         toast.message("Preparing checkout…");
-        await pollCheckout(selectedOrg.id, attempt.attempt_id);
+        await pollCheckout(orgId, attempt.attempt_id, controller.signal);
         return;
       }
       if (attempt.status === "completed") {
-        router.push(`/workspace/${selectedOrg.id}?tab=billing`);
+        setRecoveryOrgId(orgId);
+        router.push(`/billing/return?org_id=${orgId}&attempt_id=${encodeURIComponent(attempt.attempt_id)}`);
         return;
       }
-      toast.error("Checkout could not be prepared. Please try again.");
+      setRecoveryOrgId(orgId);
+      toast.message("Review checkout status in workspace billing before trying again.");
     } catch (err) {
+      if (controller.signal.aborted) return;
+      setRecoveryOrgId(orgId);
       toast.error(billingErrorMessage(err));
     } finally {
-      setPendingPlanId(null);
+      clearTimeout(timeout);
+      checkoutInFlight.current = false;
+      if (!controller.signal.aborted) setPendingPlanId(null);
     }
   };
 
   const resolveCta = (plan: (typeof PRICING_PLANS)[number]): PlanCta => {
     if (plan.id === "personal.basic") return { kind: "free" };
     if (!authed) return { kind: "signin" };
+    if (catalogError || accountError) return { kind: "unavailable", reason: "Could not load checkout details. Use Retry on this page." };
+    if (recoveryOrgId && recoveryOrgId === selectedOrg?.id) return { kind: "unavailable", reason: "Review workspace billing before another purchase." };
     if (orgsLoading || emailVerified === null) return { kind: "loading" };
     if (ownedOrgs.length === 0) return { kind: "no-owned-org" };
     if (!selectedOrg) return { kind: "loading" };
@@ -589,9 +647,10 @@ export function PricingPageContent() {
             {ownedOrgs.length > 0 ? (
               <Select
                 value={selectedOrg?.id ?? ""}
+                disabled={pendingPlanId !== null}
                 onValueChange={(v) => setSelectedOrgId(v)}
               >
-                <SelectTrigger className="w-[300px] border-white/10 bg-white/[0.03]">
+                <SelectTrigger aria-label="Workspace to subscribe" className="w-full max-w-[300px] border-white/10 bg-white/[0.03]">
                   <SelectValue placeholder="Choose a workspace" />
                 </SelectTrigger>
                 <SelectContent>
@@ -603,7 +662,7 @@ export function PricingPageContent() {
                 </SelectContent>
               </Select>
             ) : (
-              !orgsLoading && (
+              !orgsLoading && !accountError && (
                 <p className="text-sm text-[var(--text-3)]">
                   You must own a workspace to subscribe.
                 </p>
@@ -614,9 +673,22 @@ export function PricingPageContent() {
       </section>
 
       <section className="mx-auto max-w-[1180px] px-4 pt-2 pb-12 md:px-8">
+        {(catalogError || accountError) && (
+          <Card className="mb-5 p-4 text-sm">
+            <p role="alert">{catalogError ? "Live pricing could not be loaded. Displayed prices are informational; checkout is unavailable until pricing is confirmed." : "We could not load your account and workspace details."}</p>
+            <button type="button" disabled={pendingPlanId !== null} onClick={() => setRetry((value) => value + 1)} className="mt-2 min-h-11 font-semibold text-[var(--accent-hi)] underline">Retry</button>
+          </Card>
+        )}
+        {recoveryOrgId && (
+          <Card className="mb-5 p-4 text-sm">
+            <p role="status">Review your existing checkout or subscription before making another purchase.</p>
+            <Link href={`/workspace/${recoveryOrgId}?tab=billing`} className="mt-2 inline-flex min-h-11 items-center font-semibold text-[var(--accent-hi)] underline">Open workspace billing</Link>
+          </Card>
+        )}
+        {pendingPlanId && <p role="status" className="mb-4 text-sm text-[var(--text-2)]">Preparing {orgPlanLabel(pendingPlanId)} for {selectedOrg?.name}. Please keep this page open.</p>}
         <div className="mb-5 flex flex-col gap-3 border-b border-white/[0.06] pb-5 sm:flex-row sm:items-center sm:justify-between">
           <span className="font-mono text-[11px] uppercase tracking-wide text-[var(--text-3)]">All prices in USD</span>
-          <BillingToggle period={period} onChange={setPeriod} />
+          <BillingToggle period={period} onChange={setPeriod} disabled={pendingPlanId !== null} />
         </div>
         <div className={cn("grid gap-5 md:grid-cols-2 xl:grid-rows-[auto_auto_auto_1fr_auto]", audience === "personal" ? "xl:grid-cols-3" : "xl:grid-cols-2")}>
           {visiblePlans.map((plan) => (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { format } from "date-fns";
 import { Loader2 } from "lucide-react";
@@ -17,6 +17,7 @@ import {
   billingErrorMessage,
   formatMinor,
   providerStatusLabel,
+  safeCheckoutUrl,
 } from "@/lib/billing";
 import {
   ActionButton,
@@ -62,15 +63,25 @@ export function BillingPanel({ org }: { org: GatewayOrg }) {
   const [error, setError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [cancelPending, setCancelPending] = useState(false);
+  const cancelInFlight = useRef(false);
+  const request = useRef<AbortController | null>(null);
+  const currentOrgId = useRef(org.id);
+  currentOrgId.current = org.id;
 
   const isOwner = isOrgOwner(org);
 
   const load = useCallback(() => {
+    if (!isOwner) return;
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
     setLoading(true);
     setError(null);
-    fetchOrgBilling(org.id)
-      .then(setStatus)
+    fetchOrgBilling(org.id, controller.signal)
+      .then((value) => { if (!controller.signal.aborted) setStatus(value); })
       .catch((e) => {
+        if (controller.signal.aborted) return;
         // Orgs with no billing record may 404 — that is "no subscription".
         if (e instanceof GatewayApiError && e.status === 404) {
           setStatus(null);
@@ -78,31 +89,49 @@ export function BillingPanel({ org }: { org: GatewayOrg }) {
         }
         setError(billingErrorMessage(e));
       })
-      .finally(() => setLoading(false));
-  }, [org.id]);
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+  }, [org.id, isOwner]);
 
   useEffect(() => {
+    setStatus(null);
+    setCancelPending(false);
+    setConfirmOpen(false);
     load();
+    return () => request.current?.abort();
   }, [load]);
 
   const handleCancel = async () => {
+    if (!isOwner || cancelInFlight.current || cancelPending) return;
+    cancelInFlight.current = true;
     setCancelling(true);
     try {
       await requestOrgBillingCancel(org.id);
-      toast.success("Cancellation scheduled at the next billing date");
+      if (currentOrgId.current !== org.id) return;
+      setCancelPending(true);
+      toast.success("Cancellation requested. Check billing status for confirmation.");
       setConfirmOpen(false);
       load();
     } catch (e) {
+      if (currentOrgId.current !== org.id) return;
+      setCancelPending(!(e instanceof GatewayApiError) || e.status >= 500);
       toast.error(billingErrorMessage(e));
+      setConfirmOpen(false);
+      load();
     } finally {
+      cancelInFlight.current = false;
       setCancelling(false);
     }
   };
 
+  if (!isOwner) {
+    return <Card className="p-5 text-sm text-[var(--text-2)]">Only the workspace owner can view and manage billing. Contact your owner for plan changes.</Card>;
+  }
+
   if (loading) {
     return (
       <Card className="flex items-center justify-center p-10">
-        <Loader2 className="h-6 w-6 animate-spin text-[var(--accent)]" />
+        <Loader2 aria-hidden="true" className="h-6 w-6 animate-spin text-[var(--accent)]" />
+        <span role="status" className="ml-3 text-sm text-[var(--text-2)]">Loading billing status…</span>
       </Card>
     );
   }
@@ -110,7 +139,8 @@ export function BillingPanel({ org }: { org: GatewayOrg }) {
   if (error) {
     return (
       <Card className="border-[var(--danger)]/30 bg-[var(--danger)]/5 p-5 text-sm text-[var(--danger)]">
-        {error}
+        <p role="alert">{error}</p>
+        <ActionButton variant="neutral" className="mt-3" onClick={load}>Check billing again</ActionButton>
       </Card>
     );
   }
@@ -124,11 +154,21 @@ export function BillingPanel({ org }: { org: GatewayOrg }) {
     ["creating", "unknown", "ready"].includes(status.checkout.status);
   const canCancel =
     isOwner &&
+    !cancelPending &&
     status?.provider_status === "active" &&
     !status.cancel_at_period_end;
 
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="min-w-0 break-words text-sm text-[var(--text-2)]">Billing for {org.name}</p>
+        <ActionButton variant="neutral" disabled={cancelling} onClick={load}>Refresh status</ActionButton>
+      </div>
+      {cancelPending && !status?.cancel_at_period_end && (
+        <Card className="p-4 text-sm text-[var(--text-2)]">
+          <p role="status">Cancellation confirmation is pending. Refresh the status before sending another request. Your current access is shown below.</p>
+        </Card>
+      )}
       <Card className="p-5">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -196,12 +236,11 @@ export function BillingPanel({ org }: { org: GatewayOrg }) {
       )}
 
       {checkoutInProgress && (
-        <Card className="flex items-center gap-3 p-4 text-sm text-[var(--text-2)]">
-          <Loader2 className="h-4 w-4 animate-spin text-[var(--accent)]" />
-          <span className="flex-1">Checkout in progress…</span>
-          {status?.checkout?.checkout_url && (
+        <Card className="flex flex-wrap items-center gap-3 p-4 text-sm text-[var(--text-2)]">
+          <span role="status" className="flex-1">An existing checkout is pending. Resume it if you have not paid, or refresh the status if you have.</span>
+          {status?.checkout?.status === "ready" && safeCheckoutUrl(status.checkout.checkout_url) && (
             <a
-              href={status.checkout.checkout_url}
+              href={safeCheckoutUrl(status.checkout.checkout_url)!}
               className="font-semibold text-[var(--accent-hi)]"
             >
               Resume checkout
@@ -217,7 +256,7 @@ export function BillingPanel({ org }: { org: GatewayOrg }) {
               ? "Plan changes and invoices are handled through checkout."
               : "Only the workspace owner can change or cancel the plan."}
           </p>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {isOwner && (
               <Link href="/pricing">
                 <ActionButton type="button" variant="neutral">
@@ -238,7 +277,7 @@ export function BillingPanel({ org }: { org: GatewayOrg }) {
         </div>
       </Card>
 
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+      <AlertDialog open={confirmOpen} onOpenChange={(open) => { if (!cancelInFlight.current) setConfirmOpen(open); }}>
         <AlertDialogContent className="border-white/10 bg-[var(--elevated)] text-[var(--text)]">
           <AlertDialogHeader>
             <AlertDialogTitle>Cancel subscription?</AlertDialogTitle>
@@ -250,7 +289,7 @@ export function BillingPanel({ org }: { org: GatewayOrg }) {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel className="border-white/10 bg-white/[0.05]">
+            <AlertDialogCancel disabled={cancelling} className="border-white/10 bg-white/[0.05]">
               Keep plan
             </AlertDialogCancel>
             <AlertDialogAction

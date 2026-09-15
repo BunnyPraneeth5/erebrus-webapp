@@ -28,7 +28,9 @@ import {
   authenticateSolana as gatewayAuthenticateSolana,
   linkWalletEvm,
   linkWalletSolana,
+  authErrorMessage,
 } from "@/lib/gateway-auth";
+import { isWalletProjectConfigured } from "@/lib/env";
 
 declare global {
   interface Window {
@@ -122,19 +124,17 @@ const riseTestnet = defineChain({
   },
 });
 
-export const projectId = process.env.NEXT_PUBLIC_PROJECT_ID;
-
-if (!projectId) {
-  throw new Error(
-    "Project ID is not defined. Please set NEXT_PUBLIC_PROJECT_ID in your environment variables."
-  );
-}
+export const projectId = process.env.NEXT_PUBLIC_PROJECT_ID?.trim();
+export const walletConfigured = isWalletProjectConfigured(projectId);
+export const walletConfigurationMessage = process.env.NODE_ENV === "development"
+  ? "Wallet sign-in is unavailable. Configure a valid NEXT_PUBLIC_PROJECT_ID from Reown and restart the webapp."
+  : "Wallet sign-in is currently unavailable. Please use another sign-in method.";
 
 const metadata = {
   name: "Erebrus",
   description:
     "Redefining digital connectivity with globally accessible, secure and private network through DePIN.",
-  url: "https://erebrus.io/",
+  url: typeof window === "undefined" ? "https://erebrus.io/" : window.location.origin,
   icons: ["https://erebrus.io/favicon.ico"],
 };
 
@@ -336,9 +336,8 @@ const authenticateEVM = async (
     setAuthCookies("evm", session.token, walletAddress, session.userId);
     return true;
   } catch (error) {
-    console.error("EVM Authentication error:", error);
     clearAuthCookies("evm");
-    return false;
+    throw error;
   }
 };
 
@@ -352,9 +351,8 @@ const authenticateSolana = async (
     setAuthCookies("solana", session.token, walletAddress, session.userId);
     return true;
   } catch (error) {
-    console.error("Solana Authentication error:", error);
     clearAuthCookies("solana");
-    return false;
+    throw error;
   }
 };
 
@@ -468,9 +466,7 @@ export function useWalletAuth() {
         throw new Error("Authentication failed");
       }
     } catch (error) {
-      console.error("Authentication error:", error);
-      const errorMessage =
-        error instanceof Error ? error.message : "Authentication failed";
+      const errorMessage = authErrorMessage(error);
       setAuthError(errorMessage);
       toast.error(errorMessage);
       return false;
@@ -571,7 +567,7 @@ export function AppKit({ children }: { children: React.ReactNode }) {
 }
 
 // Initialize AppKit
-createAppKit({
+const appKit = typeof window !== "undefined" && walletConfigured && projectId ? createAppKit({
   adapters: [new EthersAdapter(), solanaWeb3JsAdapter],
   metadata,
   networks: [mainnet, solana],
@@ -600,4 +596,25 @@ createAppKit({
     3338: "/peaq.jpg",
     6969: "/monad-logo.png",
   },
-});
+}) : null;
+
+const walletModal = {
+  async open(options?: Parameters<ReturnType<typeof createAppKit>["open"]>[0]) {
+    if (!appKit) {
+      toast.error(walletConfigurationMessage);
+      return;
+    }
+    try {
+      await appKit.open(options);
+    } catch {
+      toast.error("Unable to open the wallet connection. Please try again.");
+    }
+  },
+  async close() {
+    await appKit?.close();
+  },
+};
+
+export function useAppKit() {
+  return walletModal;
+}

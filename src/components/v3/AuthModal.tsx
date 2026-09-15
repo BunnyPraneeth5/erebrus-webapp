@@ -14,10 +14,11 @@ import Image from "next/image";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useAppKit } from "@reown/appkit/react";
+import { useAppKit, walletConfigured, walletConfigurationMessage } from "@/context/appkit";
 import { useWalletAuth, setWebSession } from "@/context/appkit";
 import { useAppleSignIn, useGoogleSignIn, type AppleCredential } from "@/hooks/use-social-login";
 import {
@@ -180,7 +181,7 @@ export function AuthModalProvider({
     <AuthModalContext.Provider value={{ open }}>
       {children}
       <Dialog open={visible} onOpenChange={setVisible}>
-        <DialogContent className="max-w-md border-white/10 bg-[var(--elevated)] text-[var(--text)]">
+        <DialogContent className="max-h-[90dvh] max-w-md overflow-y-auto border-white/10 bg-[var(--elevated)] text-[var(--text)]">
           <DialogHeader>
             <div className="flex items-center gap-3 mb-2">
               <Image
@@ -195,12 +196,13 @@ export function AuthModalProvider({
               </DialogTitle>
             </div>
           </DialogHeader>
-          <p className="text-sm text-[var(--text-2)] leading-relaxed">
-            Sign in with your wallet, email, or a social account — one Erebrus account, however
-            you connect.
-          </p>
+          <DialogDescription className="text-sm text-[var(--text-2)] leading-relaxed">
+            Choose an available sign-in method to access your Erebrus account.
+            Wallet sign-in asks for a message signature, not a payment.
+          </DialogDescription>
+          {!walletConfigured && <p role="status" className="text-sm text-[var(--text-2)]">{walletConfigurationMessage}</p>}
           <div className="mt-4 flex flex-col gap-3">
-            <AccentButton className="w-full" onClick={handleLaunch} disabled={isAuthenticating}>
+            <AccentButton className="w-full" onClick={handleLaunch} disabled={!walletConfigured || isAuthenticating}>
               {isAuthenticating ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -327,6 +329,7 @@ export function AuthModalProvider({
             ) : (
               <div className="flex flex-col gap-1">
                 <Input
+                  aria-label="Invite code (optional)"
                   placeholder="Invite code (optional)"
                   value={invite}
                   onChange={(e) => updateInvite(e.target.value)}

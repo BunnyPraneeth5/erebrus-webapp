@@ -92,6 +92,9 @@ jobs:
 
             cd "$WEBAPP_DIR"
             echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+            # One-time cleanup: the old deploy.yml (docker run, pre-compose) left a
+            # container with this exact name, which blocks compose from managing it.
+            docker rm -f "$WEBAPP_CONTAINER_NAME" 2>/dev/null || true
             docker compose -f docker-compose.dev.yml pull
             docker compose -f docker-compose.dev.yml up -d --remove-orphans
 

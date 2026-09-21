@@ -1,0 +1,11 @@
+# Prod server compose manifest, copied by .github/workflows/docker-publish.yml.
+# NEXT_PUBLIC_* vars are baked into the image at build time (see docker-publish.yml),
+# so no runtime .env is needed here — unlike the gateway, which reads secrets at startup.
+
+services:
+  webapp:
+    image: ${WEBAPP_IMAGE:-ghcr.io/netsepio/erebrus-webapp:prod}
+    container_name: ${WEBAPP_CONTAINER_NAME:-erebrus-frontend}
+    restart: always
+    ports:
+      - "4040:3000"

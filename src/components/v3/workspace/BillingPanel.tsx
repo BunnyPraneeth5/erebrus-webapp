@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { format } from "date-fns";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 import {
   fetchOrgBilling,
   requestOrgBillingCancel,
@@ -20,6 +21,7 @@ import {
   safeCheckoutUrl,
 } from "@/lib/billing";
 import {
+  actionButtonClass,
   ActionButton,
   Card,
   MonoLabel,
@@ -55,6 +57,26 @@ function statusColor(status: string | undefined): string {
     default:
       return "var(--text-2)";
   }
+}
+
+/** Consistent banner for billing notices — one pattern, three tones. */
+function NoticeCard({
+  tone = "neutral",
+  children,
+}: {
+  tone?: "neutral" | "accent" | "danger";
+  children: ReactNode;
+}) {
+  const tones = {
+    neutral: "text-[var(--text-2)]",
+    accent: "border-[var(--accent)]/25 bg-[var(--accent)]/5 text-[var(--text-2)]",
+    danger: "border-[var(--danger)]/30 bg-[var(--danger)]/5 text-[var(--danger)]",
+  };
+  return (
+    <Card className={cn("flex flex-wrap items-center gap-3 p-4 text-sm", tones[tone])}>
+      {children}
+    </Card>
+  );
 }
 
 export function BillingPanel({ org }: { org: GatewayOrg }) {
@@ -161,13 +183,13 @@ export function BillingPanel({ org }: { org: GatewayOrg }) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="min-w-0 break-words text-sm text-[var(--text-2)]">Billing for {org.name}</p>
+        <p className="min-w-0 break-words text-sm font-semibold">Billing for {org.name}</p>
         <ActionButton variant="neutral" disabled={cancelling} onClick={load}>Refresh status</ActionButton>
       </div>
       {cancelPending && !status?.cancel_at_period_end && (
-        <Card className="p-4 text-sm text-[var(--text-2)]">
-          <p role="status">Cancellation confirmation is pending. Refresh the status before sending another request. Your current access is shown below.</p>
-        </Card>
+        <NoticeCard>
+          <p role="status" className="min-w-0 flex-1">Cancellation confirmation is pending. Refresh the status before sending another request. Your current access is shown below.</p>
+        </NoticeCard>
       )}
       <Card className="p-5">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -215,48 +237,52 @@ export function BillingPanel({ org }: { org: GatewayOrg }) {
       </Card>
 
       {status?.cancel_at_period_end && (
-        <Card className="border-[var(--accent)]/25 bg-[var(--accent)]/5 p-4 text-sm text-[var(--text-2)]">
-          Cancels on{" "}
-          <span className="font-semibold text-[var(--text)]">
-            {nextBilling ?? paidAccessUntil ?? "the next billing date"}
-          </span>
-          {paidAccessUntil ? ` — access remains until ${paidAccessUntil}.` : "."}
-        </Card>
+        <NoticeCard tone="accent">
+          <p className="min-w-0 flex-1">
+            Cancels on{" "}
+            <span className="font-semibold text-[var(--text)]">
+              {nextBilling ?? paidAccessUntil ?? "the next billing date"}
+            </span>
+            {paidAccessUntil ? ` — access remains until ${paidAccessUntil}.` : "."}
+          </p>
+        </NoticeCard>
       )}
 
       {(status?.provider_status === "past_due" ||
         status?.provider_status === "on_hold") && (
-        <Card className="border-[var(--danger)]/30 bg-[var(--danger)]/5 p-4 text-sm text-[var(--danger)]">
-          {status.provider_status === "past_due"
-            ? `A payment is past due${
-                pastDueEnds ? ` — resolve it by ${pastDueEnds}` : ""
-              } to keep your subscription active.`
-            : "This subscription is on hold due to a payment issue."}
-        </Card>
+        <NoticeCard tone="danger">
+          <p className="min-w-0 flex-1">
+            {status.provider_status === "past_due"
+              ? `A payment is past due${
+                  pastDueEnds ? ` — resolve it by ${pastDueEnds}` : ""
+                } to keep your subscription active.`
+              : "This subscription is on hold due to a payment issue."}
+          </p>
+        </NoticeCard>
       )}
 
       {checkoutInProgress && (
-        <Card className="flex flex-wrap items-center gap-3 p-4 text-sm text-[var(--text-2)]">
-          <span role="status" className="flex-1">An existing checkout is pending. Resume it if you have not paid, or refresh the status if you have.</span>
+        <NoticeCard>
+          <span role="status" className="min-w-0 flex-1">An existing checkout is pending. Resume it if you have not paid, or refresh the status if you have.</span>
           {status?.checkout?.status === "ready" && safeCheckoutUrl(status.checkout.checkout_url) && (
             <a
               href={safeCheckoutUrl(status.checkout.checkout_url)!}
-              className="font-semibold text-[var(--accent-hi)]"
+              className={actionButtonClass("accent")}
             >
               Resume checkout
             </a>
           )}
-        </Card>
+        </NoticeCard>
       )}
 
       <Card className="p-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm text-[var(--text-2)]">
+          <p className="min-w-0 text-sm text-[var(--text-2)]">
             {isOwner
               ? "Plan changes and invoices are handled through checkout."
               : "Only the workspace owner can change or cancel the plan."}
           </p>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex shrink-0 flex-wrap gap-2">
             {isOwner && (
               <Link href="/pricing">
                 <ActionButton type="button" variant="neutral">

@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Loader2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, Loader2, XCircle } from "lucide-react";
 import { fetchOrgBilling, GatewayApiError } from "@/lib/gateway/client";
 import { orgPlanLabel } from "@/lib/org-plans";
 import { billingErrorMessage, billingReturnPhase, safeCheckoutUrl } from "@/lib/billing";
-import { AccentButton, ActionButton, Card, Eyebrow } from "@/components/v3/ui";
+import { accentButtonClass, ActionButton, Card } from "@/components/v3/ui";
 
 const POLL_MS = 2500;
 const POLL_TIMEOUT_MS = 60_000;
@@ -115,25 +115,53 @@ export function BillingReturnContent() {
     expired: "The gateway reports that this checkout expired. Review workspace billing before starting a new checkout.",
   };
 
+  const phaseIcons: Record<Phase, ReactNode> = {
+    verifying: <Loader2 className="h-7 w-7 animate-spin" />,
+    active: <CheckCircle2 className="h-7 w-7" />,
+    "payment-issue": <AlertTriangle className="h-7 w-7" />,
+    pending: <Clock className="h-7 w-7" />,
+    error: <XCircle className="h-7 w-7" />,
+    failed: <XCircle className="h-7 w-7" />,
+    expired: <Clock className="h-7 w-7" />,
+  };
+  const phaseColors: Record<Phase, string> = {
+    verifying: "var(--accent)",
+    active: "var(--success)",
+    "payment-issue": "var(--accent)",
+    pending: "var(--text-2)",
+    error: "var(--danger)",
+    failed: "var(--danger)",
+    expired: "var(--danger)",
+  };
+
   return (
     <div className="mx-auto w-full max-w-lg px-4 py-10 text-center sm:py-16">
       <Card className="p-5 sm:p-8">
         <div role="status" aria-live="polite" aria-atomic="true">
-          {phase === "verifying" && <Loader2 aria-hidden="true" className="mx-auto mb-4 h-8 w-8 animate-spin text-[var(--accent)]" />}
-          {phase === "active" && <Eyebrow className="mb-2">Active</Eyebrow>}
+          <div
+            aria-hidden="true"
+            className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full"
+            style={{
+              color: phaseColors[phase],
+              background: `color-mix(in srgb, ${phaseColors[phase]} 12%, transparent)`,
+              boxShadow: `0 0 28px color-mix(in srgb, ${phaseColors[phase]} 25%, transparent)`,
+            }}
+          >
+            {phaseIcons[phase]}
+          </div>
           <h1 className="text-xl font-semibold tracking-tight">{titles[phase]}</h1>
           <p className="mt-3 text-sm leading-relaxed text-[var(--text-2)]">{descriptions[phase]}</p>
           {detail && phase !== "error" && <p className="mt-3 text-sm text-[var(--danger)]">{detail}</p>}
         </div>
         <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row sm:flex-wrap">
-          {validOrgId && (phase === "pending" || phase === "error") && (
-            <ActionButton variant="accent" onClick={() => { setPhase("verifying"); setRetry((value) => value + 1); }}>Check again</ActionButton>
-          )}
-          <Link href={workspaceLink} className="inline-block">
-            <AccentButton className="w-full !px-4 !py-2.5">Open workspace billing</AccentButton>
+          <Link href={workspaceLink} className={accentButtonClass("primary", "w-full sm:w-auto")}>
+            Open workspace billing
           </Link>
+          {validOrgId && (phase === "pending" || phase === "error") && (
+            <ActionButton variant="neutral" className="sm:min-h-11" onClick={() => { setPhase("verifying"); setRetry((value) => value + 1); }}>Check again</ActionButton>
+          )}
           {checkoutUrl && (phase === "verifying" || phase === "pending") && (
-            <a href={checkoutUrl} className="inline-flex min-h-11 items-center justify-center font-semibold text-[var(--accent-hi)] underline">Resume existing checkout</a>
+            <a href={checkoutUrl} className={accentButtonClass("ghost")}>Resume existing checkout</a>
           )}
         </div>
         {attemptId && <p className="mt-6 break-all font-mono text-[10px] text-[var(--text-3)]">Reference: {attemptId}</p>}

@@ -29,6 +29,7 @@ import { toast } from "sonner";
 import { useAppKitAccount, useAppKitNetworkCore } from "@reown/appkit/react";
 import { useAppKit } from "@/context/appkit";
 import { useWalletAuth } from "@/context/appkit";
+import { useEntitlement } from "@/hooks/use-entitlement";
 import { Camera, Check, Loader2, Pencil, X } from "lucide-react";
 import Image from "next/image";
 import type { HeliusNft } from "@/lib/helius";
@@ -45,6 +46,7 @@ export default function ProfilePage() {
   const { caipNetworkId } = useAppKitNetworkCore();
   const { open: openAppKit } = useAppKit();
   const { isAuthenticating, linkWallet } = useWalletAuth();
+  const { entitlement } = useEntitlement();
   const [profile, setProfile] = useState<GatewayProfile | null>(null);
   const [referral, setReferral] = useState<GatewayReferral | null>(null);
   const [rank, setRank] = useState<GatewayRank | null>(null);
@@ -371,6 +373,19 @@ export default function ProfilePage() {
                         : "Connect wallet"}
                   </AccentButton>
                 </div>
+              )}
+            </div>
+            <div className="rounded-[11px] border border-white/[0.06] bg-white/[0.015] px-4 py-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-[var(--text-2)]">Plan</span>
+                <span className="font-mono text-[11px] text-[var(--accent-hi)]">
+                  {entitlement.planLabel}
+                </span>
+              </div>
+              {entitlement.org?.name && (
+                <p className="mt-1 text-xs text-[var(--text-3)]">
+                  via {entitlement.org.name}
+                </p>
               )}
             </div>
             {profile?.role === "admin" && <Row label="Platform role" value="Admin" ok />}

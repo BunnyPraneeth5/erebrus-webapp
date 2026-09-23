@@ -7,7 +7,8 @@ import {
   fetchVpnClients,
 } from "@/lib/gateway/client";
 import { useOnlineNodes } from "@/context/online-nodes";
-import { resolveEffectiveEntitlement, tierLabel } from "@/lib/entitlements";
+import { resolveEffectiveEntitlement } from "@/lib/entitlements";
+import { orgPlanLabel } from "@/lib/org-plans";
 import { AccentButton, Card, StatCard, StatusDot } from "@/components/v3/ui";
 import type { GatewayOrg, GatewayVpnClient } from "@/lib/gateway/types";
 
@@ -59,10 +60,10 @@ export default function DashboardPage() {
           </div>
           <div>
             <div className="font-mono text-[11px] uppercase tracking-[0.15em] text-[var(--accent-hi)]">
-              Current plan · {tierLabel(entitlement.tier)}
+              Current plan · {entitlement.planLabel}
             </div>
             <div className="mt-1.5 text-xl font-bold tracking-tight md:text-[22px]">
-              {isFree ? "Free tier" : `${tierLabel(entitlement.tier)} plan`}
+              {isFree ? "Free tier" : entitlement.planLabel}
             </div>
             <div className="mt-1 text-sm text-[var(--text-2)]">
               {entitlement.org?.name
@@ -112,7 +113,7 @@ export default function DashboardPage() {
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-semibold">{org.name}</div>
                   <div className="text-xs text-[var(--text-3)]">
-                    {org.kind} · {org.member_count ?? 0} members
+                    {orgPlanLabel(org.plan ?? org.kind)} · {org.member_count ?? 0} members
                   </div>
                 </div>
                 <div className="text-right font-mono text-[13px] text-[var(--success)]">

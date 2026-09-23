@@ -11,6 +11,7 @@ import {
 import type { GatewayOrg, GatewayUserOrgInvite } from "@/lib/gateway/types";
 import { inviteOrgTitle } from "@/lib/invite-notifications";
 import { memberRoleLabel } from "@/lib/gateway/member-labels";
+import { orgPlanLabel } from "@/lib/org-plans";
 import { AccentButton, ActionButton, Card } from "@/components/v3/ui";
 import {
   Dialog,
@@ -201,7 +202,7 @@ export default function WorkspacePage() {
                 />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-lg font-semibold">{org.name}</div>
-                  <div className="text-xs capitalize text-[var(--text-3)]">{org.kind}</div>
+                  <div className="text-xs capitalize text-[var(--text-3)]">{orgPlanLabel(org.plan ?? org.kind)}</div>
                 </div>
                 {org.role && (
                   <span className="rounded-md bg-white/[0.06] px-2 py-1 font-mono text-[10px] uppercase text-[var(--text-2)]">

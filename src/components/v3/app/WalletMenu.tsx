@@ -9,7 +9,7 @@ import { useAppKit } from "@/context/appkit";
 import { truncateAddress } from "@/lib/design";
 import { userDisplayName } from "@/lib/display-name";
 import { fetchProfile } from "@/lib/gateway/client";
-import { tierLabel, type EffectiveEntitlement } from "@/lib/entitlements";
+import type { EffectiveEntitlement } from "@/lib/entitlements";
 import type { GatewayProfile } from "@/lib/gateway/types";
 import Cookies from "js-cookie";
 import { usePlatformAdmin } from "@/hooks/use-platform-admin";
@@ -155,7 +155,7 @@ export function WalletMenu({ entitlement }: { entitlement: EffectiveEntitlement 
                 </button>
               )}
               <div className="mt-2 font-mono text-[11px] text-[var(--accent-hi)]">
-                {tierLabel(entitlement.tier)} plan
+                {entitlement.planLabel}
                 {entitlement.org?.name ? ` · ${entitlement.org.name}` : ""}
               </div>
             </div>

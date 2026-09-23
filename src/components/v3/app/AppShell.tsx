@@ -12,7 +12,6 @@ import { WalletMenu } from "@/components/v3/app/WalletMenu";
 import { AccentButton, iconButtonClass } from "@/components/v3/ui";
 import { AuthModalProvider } from "@/components/v3/AuthModal";
 import { useEntitlement } from "@/hooks/use-entitlement";
-import { tierLabel } from "@/lib/entitlements";
 import type { EffectiveEntitlement } from "@/lib/entitlements";
 
 const NAV = [
@@ -73,7 +72,7 @@ function PlanCard({ entitlement }: { entitlement: EffectiveEntitlement }) {
           Plan
         </span>
         <span className="font-mono text-[11px] text-[var(--accent-hi)]">
-          {tierLabel(entitlement.tier)}
+          {entitlement.planLabel}
         </span>
       </div>
       {entitlement.org?.name && (

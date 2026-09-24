@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@/context/appkit", () => ({ getCurrentAuthToken: () => null }));
+vi.mock("@/lib/auth-session", () => ({ getCurrentAuthToken: () => null, invalidateSession: vi.fn() }));
 
 import { claimQueuedUploads, isUploadActive, type UploadItem } from "./use-drop-uploads";
 

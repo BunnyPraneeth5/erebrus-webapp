@@ -1,4 +1,4 @@
-import { getCurrentAuthToken } from "@/context/appkit";
+import { getCurrentAuthToken, invalidateSession } from "@/lib/auth-session";
 import { computeOrgStats } from "./org-stats";
 import {
   normalizeActivity,
@@ -112,10 +112,8 @@ async function gatewayFetch<T>(
   headers.set("Accept", "application/json");
   headers.set("X-Erebrus-Client", CLIENT_HEADER);
 
-  if (auth) {
-    const token = getCurrentAuthToken();
-    if (token) headers.set("Authorization", `Bearer ${token}`);
-  }
+  const token = auth ? getCurrentAuthToken() : null;
+  if (token) headers.set("Authorization", `Bearer ${token}`);
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
@@ -123,6 +121,7 @@ async function gatewayFetch<T>(
   const res = await fetch(buildUrl(path, params), { ...init, headers, cache: "no-store" });
 
   if (!res.ok) {
+    if (res.status === 401 && token) invalidateSession(token);
     const text = await res.text();
     let body: unknown;
     try {

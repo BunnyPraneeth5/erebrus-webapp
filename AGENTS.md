@@ -221,3 +221,11 @@ if (!mounted) return null;
 - `pnpm exec next build --webpack` verifies the production build without running the `prebuild` installer-download script. `pnpm build` also refreshes `public/install.sh` from the upstream repository.
 - Vitest uses the Node environment. Mock browser APIs and external wallet/payment services in tests; do not use real sessions or perform real payments.
 - Browser wallet initialization is skipped during SSR and when the Reown project ID is missing or malformed. This does not disable email/social sign-in or replace a valid Reown project configuration.
+
+## Browser Session Conventions
+
+- `src/lib/auth-session.ts` owns cookie selection, shared session validation, expiry, and cross-tab notifications. API clients import it directly rather than importing the wallet SDK through `context/appkit`.
+- A wallet connection is required for signing/linking, not for retaining an Erebrus session. Do not clear session cookies on wallet disconnect or add route-specific authentication exceptions.
+- Stored sessions are validated through `GET /api/gateway/account/profile`. Only a 401 for the current request token invalidates the session; connectivity failures and permission errors must not log users out.
+- Successful login replaces previous session cookies. Ambiguous cookies belonging to multiple accounts require explicit sign-in. Cross-tab notifications contain no credentials.
+- Session regression tests run in Vitest's Node environment with mocked cookies, wallet adapters, browser events, and gateway responses; no live checkout is needed.

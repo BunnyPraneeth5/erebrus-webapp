@@ -38,6 +38,7 @@ import { AccentButton, ActionButton } from "@/components/v3/ui";
 import { Input } from "@/components/ui/input";
 import { Loader2, Mail } from "lucide-react";
 import { toast } from "sonner";
+import { safeAuthReturnPath } from "@/lib/auth-session";
 
 function socialLoginErrorMessage(provider: "google" | "apple", error: unknown): string {
   if (axios.isAxiosError(error)) {
@@ -57,9 +58,11 @@ const AuthModalContext = createContext<{ open: () => void }>({ open: () => {} })
 export function AuthModalProvider({
   children,
   autoOpen = false,
+  returnTo = "/dashboard",
 }: {
   children: ReactNode;
   autoOpen?: boolean;
+  returnTo?: string;
 }) {
   const [visible, setVisible] = useState(autoOpen);
   const router = useRouter();
@@ -108,14 +111,14 @@ export function AuthModalProvider({
             : await appleLogin(idToken, nonce, authorizationCode);
         setWebSession(session.token, session.userId, provider);
         setVisible(false);
-        router.push("/dashboard");
+        router.push(safeAuthReturnPath(returnTo));
       } catch (error) {
         toast.error(socialLoginErrorMessage(provider, error));
       } finally {
         setSocialBusy(false);
       }
     },
-    [router]
+    [router, returnTo]
   );
 
   const { ready: googleReady, signIn: signInWithGoogle, btnRef: googleBtnRef } =
@@ -136,9 +139,9 @@ export function AuthModalProvider({
     const ok = await authenticate();
     if (ok) {
       setVisible(false);
-      router.push("/dashboard");
+      router.push(safeAuthReturnPath(returnTo));
     }
-  }, [isConnected, authenticate, openAppKit, router]);
+  }, [isConnected, authenticate, openAppKit, router, returnTo]);
 
   const sendCode = useCallback(async () => {
     const addr = email.trim();
@@ -161,21 +164,21 @@ export function AuthModalProvider({
       const session = await emailLoginVerify(email.trim(), code.trim());
       setWebSession(session.token, session.userId, "email");
       setVisible(false);
-      router.push("/dashboard");
+      router.push(safeAuthReturnPath(returnTo));
     } catch {
       toast.error("Invalid or expired code");
     } finally {
       setEmailBusy(false);
     }
-  }, [email, code, router]);
+  }, [email, code, router, returnTo]);
 
   const open = useCallback(() => {
     if (isAuthenticated) {
-      router.push("/dashboard");
+      router.push(safeAuthReturnPath(returnTo));
       return;
     }
     setVisible(true);
-  }, [isAuthenticated, router]);
+  }, [isAuthenticated, router, returnTo]);
 
   return (
     <AuthModalContext.Provider value={{ open }}>

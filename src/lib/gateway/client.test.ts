@@ -1,13 +1,41 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/context/appkit", () => ({ getCurrentAuthToken: () => "local-test-session" }));
+vi.mock("@/lib/auth-session", () => ({ getCurrentAuthToken: vi.fn(() => "local-test-session"), invalidateSession: vi.fn() }));
+
+import { getCurrentAuthToken, invalidateSession } from "@/lib/auth-session";
 
 import { fetchOperatorNodes, fetchOrgBilling, GatewayApiError, startOrgBillingCheckout } from "./client";
 
-beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(getCurrentAuthToken).mockReturnValue("local-test-session");
+  vi.stubGlobal("fetch", vi.fn());
+});
 afterEach(() => vi.unstubAllGlobals());
 
 describe("gateway error recovery", () => {
+  it("invalidates only the token sent by a request that returns 401", async () => {
+    let respond!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise((resolve) => { respond = resolve; }));
+    const request = fetchOrgBilling("org").catch((error: unknown) => error);
+    vi.mocked(getCurrentAuthToken).mockReturnValue("new-session");
+    respond(new Response("unauthorized", { status: 401 }));
+    expect(await request).toMatchObject({ status: 401 });
+    expect(invalidateSession).toHaveBeenCalledWith("local-test-session");
+  });
+
+  it.each([403, 429, 500, 502, 504])("does not invalidate a session for HTTP %s", async (status) => {
+    vi.mocked(fetch).mockResolvedValue(new Response("error", { status }));
+    await expect(fetchOrgBilling("org")).rejects.toMatchObject({ status });
+    expect(invalidateSession).not.toHaveBeenCalled();
+  });
+
+  it("does not invalidate a session on a network timeout", async () => {
+    vi.mocked(fetch).mockRejectedValue(new TypeError("fetch failed"));
+    await expect(fetchOrgBilling("org")).rejects.toThrow("fetch failed");
+    expect(invalidateSession).not.toHaveBeenCalled();
+  });
+
   it("preserves HTTP status when an upstream returns HTML instead of JSON", async () => {
     vi.mocked(fetch).mockResolvedValue(new Response("<html>Not found</html>", { status: 404 }));
     const error = await fetchOrgBilling("org").catch((value: unknown) => value);
